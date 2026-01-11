@@ -418,3 +418,25 @@ Started: Sun 11 Jan 10:55:32 GMT 2026
   - File context via --add-dir adds directories to Claude's working context, not individual files
   - The base class already handles SIGTERM/SIGKILL escalation for timeout - just set defaultTimeout
 ---
+
+## 2026-01-11 - ralph-tui-45r.7
+- What was implemented:
+  - Full OpenCodeAgentPlugin implementing AgentPlugin interface
+  - detect(): Uses `which` to find opencode binary, then runs --version to verify
+  - buildArgs(): Constructs CLI args with `opencode run --agent <type>` for non-interactive mode
+  - Model support via --model flag with provider/model format (e.g., anthropic/claude-3-5-sonnet)
+  - File context support via --file flag (can be used multiple times)
+  - Agent type selection via --agent flag (general, build, plan)
+  - Output format selection via --format flag (default, json)
+  - Setup questions for provider, model, agent type, and output format
+  - Configurable timeout inherited from BaseAgentPlugin (defaults to 0 = no timeout)
+  - Validation for provider, agent, and format config values
+- Files changed:
+  - src/plugins/agents/builtin/opencode.ts (updated from stub to full implementation)
+- **Learnings:**
+  - OpenCode uses `opencode run <prompt>` for non-interactive mode (not flags like --print)
+  - Model format is provider/model (e.g., anthropic/claude-3-5-sonnet, openai/gpt-4o)
+  - OpenCode supports multiple agent types: general (default), build, plan - switchable via --agent
+  - The --file flag can be used multiple times to attach multiple files
+  - Providers include: anthropic, openai, google, xai, ollama
+---
