@@ -1,0 +1,685 @@
+/**
+ * ABOUTME: Execution engine for Ralph TUI agent loop.
+ * Handles the iteration cycle: select task → inject prompt → run agent → check result → update tracker.
+ * Supports configurable error handling strategies: retry, skip, abort.
+ */
+
+import { join } from 'node:path';
+import { writeFile, mkdir, access, constants } from 'node:fs/promises';
+import type {
+  EngineEvent,
+  EngineEventListener,
+  EngineState,
+  EngineStatus,
+  ErrorHandlingConfig,
+  ErrorHandlingStrategy,
+  IterationResult,
+  IterationStatus,
+} from './types.js';
+import type { RalphConfig } from '../config/types.js';
+import type { TrackerPlugin, TrackerTask } from '../plugins/trackers/types.js';
+import type { AgentPlugin, AgentExecutionHandle } from '../plugins/agents/types.js';
+import { getAgentRegistry } from '../plugins/agents/registry.js';
+import { getTrackerRegistry } from '../plugins/trackers/registry.js';
+import { updateSessionIteration, updateSessionStatus } from '../session/index.js';
+
+/**
+ * Pattern to detect completion signal in agent output
+ */
+const PROMISE_COMPLETE_PATTERN = /<promise>\s*COMPLETE\s*<\/promise>/i;
+
+/**
+ * Build prompt for the agent based on task
+ */
+function buildPrompt(task: TrackerTask, _config: RalphConfig): string {
+  const lines: string[] = [];
+
+  lines.push('## Task');
+  lines.push(`**ID**: ${task.id}`);
+  lines.push(`**Title**: ${task.title}`);
+
+  if (task.description) {
+    lines.push('');
+    lines.push('## Description');
+    lines.push(task.description);
+  }
+
+  if (task.labels && task.labels.length > 0) {
+    lines.push('');
+    lines.push(`**Labels**: ${task.labels.join(', ')}`);
+  }
+
+  if (task.dependsOn && task.dependsOn.length > 0) {
+    lines.push('');
+    lines.push(`**Dependencies**: ${task.dependsOn.join(', ')}`);
+  }
+
+  // Add instructions
+  lines.push('');
+  lines.push('## Instructions');
+  lines.push('Complete the task described above. When finished, signal completion with:');
+  lines.push('<promise>COMPLETE</promise>');
+
+  return lines.join('\n');
+}
+
+/**
+ * Execution engine for the agent loop
+ */
+export class ExecutionEngine {
+  private config: RalphConfig;
+  private agent: AgentPlugin | null = null;
+  private tracker: TrackerPlugin | null = null;
+  private listeners: EngineEventListener[] = [];
+  private state: EngineState;
+  private currentExecution: AgentExecutionHandle | null = null;
+  private shouldStop = false;
+  /** Track retry attempts per task */
+  private retryCountMap: Map<string, number> = new Map();
+  /** Track skipped tasks to avoid retrying them */
+  private skippedTasks: Set<string> = new Set();
+
+  constructor(config: RalphConfig) {
+    this.config = config;
+    this.state = {
+      status: 'idle',
+      currentIteration: 0,
+      currentTask: null,
+      totalTasks: 0,
+      tasksCompleted: 0,
+      iterations: [],
+      startedAt: null,
+      currentOutput: '',
+    };
+  }
+
+  /**
+   * Initialize the engine with plugins
+   */
+  async initialize(): Promise<void> {
+    // Get agent instance
+    const agentRegistry = getAgentRegistry();
+    this.agent = await agentRegistry.getInstance(this.config.agent);
+
+    // Detect agent availability
+    const detectResult = await this.agent.detect();
+    if (!detectResult.available) {
+      throw new Error(
+        `Agent '${this.config.agent.plugin}' not available: ${detectResult.error}`
+      );
+    }
+
+    // Get tracker instance
+    const trackerRegistry = getTrackerRegistry();
+    this.tracker = await trackerRegistry.getInstance(this.config.tracker);
+
+    // Sync tracker
+    await this.tracker.sync();
+
+    // Get initial task count
+    const tasks = await this.tracker.getTasks({ status: ['open', 'in_progress'] });
+    this.state.totalTasks = tasks.length;
+  }
+
+  /**
+   * Add event listener
+   */
+  on(listener: EngineEventListener): () => void {
+    this.listeners.push(listener);
+    return () => {
+      const index = this.listeners.indexOf(listener);
+      if (index !== -1) {
+        this.listeners.splice(index, 1);
+      }
+    };
+  }
+
+  /**
+   * Emit an event to all listeners
+   */
+  private emit(event: EngineEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // Ignore listener errors
+      }
+    }
+  }
+
+  /**
+   * Get current engine state
+   */
+  getState(): Readonly<EngineState> {
+    return { ...this.state };
+  }
+
+  /**
+   * Get current status
+   */
+  getStatus(): EngineStatus {
+    return this.state.status;
+  }
+
+  /**
+   * Start the execution loop
+   */
+  async start(): Promise<void> {
+    if (this.state.status !== 'idle') {
+      throw new Error(`Cannot start engine in ${this.state.status} state`);
+    }
+
+    if (!this.agent || !this.tracker) {
+      throw new Error('Engine not initialized');
+    }
+
+    this.state.status = 'running';
+    this.state.startedAt = new Date().toISOString();
+    this.shouldStop = false;
+
+    this.emit({
+      type: 'engine:started',
+      timestamp: new Date().toISOString(),
+      sessionId: '',
+      totalTasks: this.state.totalTasks,
+    });
+
+    try {
+      await this.runLoop();
+    } finally {
+      this.state.status = 'idle';
+    }
+  }
+
+  /**
+   * Main execution loop
+   */
+  private async runLoop(): Promise<void> {
+    while (!this.shouldStop) {
+      // Check max iterations
+      if (
+        this.config.maxIterations > 0 &&
+        this.state.currentIteration >= this.config.maxIterations
+      ) {
+        this.emit({
+          type: 'engine:stopped',
+          timestamp: new Date().toISOString(),
+          reason: 'max_iterations',
+          totalIterations: this.state.currentIteration,
+          tasksCompleted: this.state.tasksCompleted,
+        });
+        break;
+      }
+
+      // Check if all tasks complete
+      const isComplete = await this.tracker!.isComplete();
+      if (isComplete) {
+        this.emit({
+          type: 'all:complete',
+          timestamp: new Date().toISOString(),
+          totalCompleted: this.state.tasksCompleted,
+          totalIterations: this.state.currentIteration,
+        });
+        this.emit({
+          type: 'engine:stopped',
+          timestamp: new Date().toISOString(),
+          reason: 'completed',
+          totalIterations: this.state.currentIteration,
+          tasksCompleted: this.state.tasksCompleted,
+        });
+        break;
+      }
+
+      // Get next task (excluding skipped tasks)
+      const task = await this.getNextAvailableTask();
+      if (!task) {
+        this.emit({
+          type: 'engine:stopped',
+          timestamp: new Date().toISOString(),
+          reason: 'no_tasks',
+          totalIterations: this.state.currentIteration,
+          tasksCompleted: this.state.tasksCompleted,
+        });
+        break;
+      }
+
+      // Run iteration with error handling
+      const result = await this.runIterationWithErrorHandling(task);
+
+      // Check if we should abort
+      if (result.status === 'failed' && this.config.errorHandling.strategy === 'abort') {
+        this.emit({
+          type: 'engine:stopped',
+          timestamp: new Date().toISOString(),
+          reason: 'error',
+          totalIterations: this.state.currentIteration,
+          tasksCompleted: this.state.tasksCompleted,
+        });
+        break;
+      }
+
+      // Update session
+      await updateSessionIteration(
+        this.config.cwd,
+        this.state.currentIteration,
+        this.state.tasksCompleted
+      );
+
+      // Wait between iterations
+      if (this.config.iterationDelay > 0 && !this.shouldStop) {
+        await this.delay(this.config.iterationDelay);
+      }
+    }
+  }
+
+  /**
+   * Get the next available task, excluding skipped ones
+   */
+  private async getNextAvailableTask(): Promise<TrackerTask | null> {
+    const tasks = await this.tracker!.getTasks({ status: ['open', 'in_progress'] });
+
+    for (const task of tasks) {
+      // Skip tasks that have been marked as skipped
+      if (this.skippedTasks.has(task.id)) {
+        continue;
+      }
+
+      // Check if task is ready (no unresolved dependencies)
+      const isReady = await this.tracker!.isTaskReady(task.id);
+      if (isReady) {
+        return task;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Run iteration with error handling strategy
+   */
+  private async runIterationWithErrorHandling(task: TrackerTask): Promise<IterationResult> {
+    const errorConfig = this.config.errorHandling;
+    let result = await this.runIteration(task);
+    this.state.iterations.push(result);
+
+    // Handle success
+    if (result.status !== 'failed') {
+      if (result.taskCompleted) {
+        this.state.tasksCompleted++;
+        // Clear retry count on success
+        this.retryCountMap.delete(task.id);
+      }
+      return result;
+    }
+
+    // Handle failure according to strategy
+    const errorMessage = result.error ?? 'Unknown error';
+
+    switch (errorConfig.strategy) {
+      case 'retry': {
+        const currentRetries = this.retryCountMap.get(task.id) ?? 0;
+
+        if (currentRetries < errorConfig.maxRetries) {
+          // Emit failed event with retry action
+          this.emit({
+            type: 'iteration:failed',
+            timestamp: new Date().toISOString(),
+            iteration: this.state.currentIteration,
+            error: errorMessage,
+            task,
+            action: 'retry',
+          });
+
+          // Emit retry event
+          this.emit({
+            type: 'iteration:retrying',
+            timestamp: new Date().toISOString(),
+            iteration: this.state.currentIteration,
+            retryAttempt: currentRetries + 1,
+            maxRetries: errorConfig.maxRetries,
+            task,
+            previousError: errorMessage,
+            delayMs: errorConfig.retryDelayMs,
+          });
+
+          // Update retry count
+          this.retryCountMap.set(task.id, currentRetries + 1);
+
+          // Wait before retry
+          if (errorConfig.retryDelayMs > 0 && !this.shouldStop) {
+            await this.delay(errorConfig.retryDelayMs);
+          }
+
+          // Recursively retry
+          if (!this.shouldStop) {
+            return this.runIterationWithErrorHandling(task);
+          }
+        } else {
+          // Max retries exceeded - treat as skip
+          const skipReason = `Max retries (${errorConfig.maxRetries}) exceeded: ${errorMessage}`;
+          this.emit({
+            type: 'iteration:failed',
+            timestamp: new Date().toISOString(),
+            iteration: this.state.currentIteration,
+            error: skipReason,
+            task,
+            action: 'skip',
+          });
+          this.emitSkipEvent(task, skipReason);
+          this.skippedTasks.add(task.id);
+          this.retryCountMap.delete(task.id);
+        }
+        break;
+      }
+
+      case 'skip': {
+        // Emit failed event with skip action
+        this.emit({
+          type: 'iteration:failed',
+          timestamp: new Date().toISOString(),
+          iteration: this.state.currentIteration,
+          error: errorMessage,
+          task,
+          action: 'skip',
+        });
+        this.emitSkipEvent(task, errorMessage);
+        this.skippedTasks.add(task.id);
+        break;
+      }
+
+      case 'abort': {
+        // Emit failed event with abort action
+        this.emit({
+          type: 'iteration:failed',
+          timestamp: new Date().toISOString(),
+          iteration: this.state.currentIteration,
+          error: errorMessage,
+          task,
+          action: 'abort',
+        });
+        break;
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Emit a skip event for a task
+   */
+  private emitSkipEvent(task: TrackerTask, reason: string): void {
+    this.emit({
+      type: 'iteration:skipped',
+      timestamp: new Date().toISOString(),
+      iteration: this.state.currentIteration,
+      task,
+      reason,
+    });
+  }
+
+  /**
+   * Run a single iteration
+   */
+  private async runIteration(task: TrackerTask): Promise<IterationResult> {
+    this.state.currentIteration++;
+    this.state.currentTask = task;
+    this.state.currentOutput = '';
+
+    const startedAt = new Date();
+    const iteration = this.state.currentIteration;
+
+    this.emit({
+      type: 'iteration:started',
+      timestamp: startedAt.toISOString(),
+      iteration,
+      task,
+    });
+
+    this.emit({
+      type: 'task:selected',
+      timestamp: new Date().toISOString(),
+      task,
+      iteration,
+    });
+
+    // Update task status to in_progress
+    await this.tracker!.updateTaskStatus(task.id, 'in_progress');
+
+    // Build prompt
+    const prompt = buildPrompt(task, this.config);
+
+    // Build agent flags
+    const flags: string[] = [];
+    if (this.config.model) {
+      flags.push('--model', this.config.model);
+    }
+
+    try {
+      // Execute agent
+      const handle = this.agent!.execute(prompt, [], {
+        cwd: this.config.cwd,
+        flags,
+        onStdout: (data) => {
+          this.state.currentOutput += data;
+          this.emit({
+            type: 'agent:output',
+            timestamp: new Date().toISOString(),
+            stream: 'stdout',
+            data,
+            iteration,
+          });
+        },
+        onStderr: (data) => {
+          this.emit({
+            type: 'agent:output',
+            timestamp: new Date().toISOString(),
+            stream: 'stderr',
+            data,
+            iteration,
+          });
+        },
+      });
+
+      this.currentExecution = handle;
+
+      // Wait for completion
+      const agentResult = await handle.promise;
+      this.currentExecution = null;
+
+      const endedAt = new Date();
+      const durationMs = endedAt.getTime() - startedAt.getTime();
+
+      // Check for completion signal
+      const promiseComplete = PROMISE_COMPLETE_PATTERN.test(agentResult.stdout);
+
+      // Determine if task was completed
+      const taskCompleted =
+        promiseComplete || agentResult.status === 'completed';
+
+      // Update tracker if task completed
+      if (taskCompleted) {
+        await this.tracker!.completeTask(task.id, 'Completed by agent');
+        this.emit({
+          type: 'task:completed',
+          timestamp: new Date().toISOString(),
+          task,
+          iteration,
+        });
+      }
+
+      // Save iteration output
+      await this.saveIterationOutput(iteration, agentResult.stdout, task);
+
+      // Determine iteration status
+      let status: IterationStatus;
+      if (agentResult.interrupted) {
+        status = 'interrupted';
+      } else if (agentResult.status === 'failed') {
+        status = 'failed';
+      } else {
+        status = 'completed';
+      }
+
+      const result: IterationResult = {
+        iteration,
+        status,
+        task,
+        agentResult,
+        taskCompleted,
+        promiseComplete,
+        durationMs,
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+      };
+
+      this.emit({
+        type: 'iteration:completed',
+        timestamp: endedAt.toISOString(),
+        result,
+      });
+
+      return result;
+    } catch (error) {
+      const endedAt = new Date();
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+
+      // Note: We don't emit iteration:failed here anymore - it's handled
+      // by runIterationWithErrorHandling which determines the action.
+      // This keeps the error handling logic centralized.
+
+      return {
+        iteration,
+        status: 'failed',
+        task,
+        taskCompleted: false,
+        promiseComplete: false,
+        durationMs: endedAt.getTime() - startedAt.getTime(),
+        error: errorMessage,
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+      };
+    } finally {
+      this.state.currentTask = null;
+    }
+  }
+
+  /**
+   * Save iteration output to file
+   */
+  private async saveIterationOutput(
+    iteration: number,
+    output: string,
+    task: TrackerTask
+  ): Promise<void> {
+    const outputDir = join(this.config.cwd, this.config.outputDir);
+
+    // Ensure output directory exists
+    try {
+      await access(outputDir, constants.F_OK);
+    } catch {
+      await mkdir(outputDir, { recursive: true });
+    }
+
+    const filename = `iteration-${String(iteration).padStart(3, '0')}-${task.id}.md`;
+    const filepath = join(outputDir, filename);
+
+    const content = [
+      `# Iteration ${iteration}: ${task.title}`,
+      '',
+      `**Task ID**: ${task.id}`,
+      `**Timestamp**: ${new Date().toISOString()}`,
+      '',
+      '## Output',
+      '',
+      '```',
+      output,
+      '```',
+    ].join('\n');
+
+    await writeFile(filepath, content);
+  }
+
+  /**
+   * Stop the execution loop
+   */
+  async stop(): Promise<void> {
+    this.shouldStop = true;
+    this.state.status = 'stopping';
+
+    // Interrupt current execution if any
+    if (this.currentExecution) {
+      this.currentExecution.interrupt();
+    }
+
+    // Update session status
+    await updateSessionStatus(this.config.cwd, 'interrupted');
+
+    this.emit({
+      type: 'engine:stopped',
+      timestamp: new Date().toISOString(),
+      reason: 'interrupted',
+      totalIterations: this.state.currentIteration,
+      tasksCompleted: this.state.tasksCompleted,
+    });
+  }
+
+  /**
+   * Pause the execution loop
+   */
+  pause(): void {
+    if (this.state.status !== 'running') {
+      return;
+    }
+
+    this.state.status = 'paused';
+    this.emit({
+      type: 'engine:paused',
+      timestamp: new Date().toISOString(),
+      currentIteration: this.state.currentIteration,
+    });
+  }
+
+  /**
+   * Resume the execution loop
+   */
+  resume(): void {
+    if (this.state.status !== 'paused') {
+      return;
+    }
+
+    this.state.status = 'running';
+    this.emit({
+      type: 'engine:resumed',
+      timestamp: new Date().toISOString(),
+      fromIteration: this.state.currentIteration,
+    });
+  }
+
+  /**
+   * Delay for specified milliseconds
+   */
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Dispose of engine resources
+   */
+  async dispose(): Promise<void> {
+    await this.stop();
+    this.listeners = [];
+  }
+}
+
+// Re-export types
+export type {
+  EngineEvent,
+  EngineEventListener,
+  EngineState,
+  EngineStatus,
+  ErrorHandlingConfig,
+  ErrorHandlingStrategy,
+  IterationResult,
+  IterationStatus,
+};

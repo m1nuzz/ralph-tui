@@ -1,7 +1,13 @@
 /**
- * ABOUTME: TUI module for terminal user interface components
+ * ABOUTME: TUI module for terminal user interface components.
  * This module exports OpenTUI React components for the ralph-tui terminal interface.
  */
 
-// TUI components will be implemented in subsequent user stories
-export {};
+// Components
+export * from './components/index.js';
+
+// Theme and styling
+export * from './theme.js';
+
+// Type definitions
+export * from './types.js';

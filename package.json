@@ -15,11 +15,13 @@
     "ralph": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "bun build ./src/cli.tsx --outdir ./dist --target bun --sourcemap=external && bun build ./src/index.ts --outdir ./dist --target bun --sourcemap=external",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "clean": "rm -rf dist",
+    "dev": "bun run ./src/cli.tsx",
     "prepublishOnly": "pnpm run build"
   },
   "files": [
@@ -51,6 +53,7 @@
   },
   "dependencies": {
     "@opentui/core": "^0.1.72",
-    "@opentui/react": "^0.1.72"
+    "@opentui/react": "^0.1.72",
+    "yaml": "^2.8.2"
   }
 }

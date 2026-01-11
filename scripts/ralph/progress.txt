@@ -1,0 +1,323 @@
+# Ralph Progress Log
+Started: Sun 11 Jan 10:55:32 GMT 2026
+---
+
+## Codebase Patterns
+- Use `pnpm typecheck` before committing
+- ESLint 9 uses flat config format (eslint.config.js)
+- TypeScript strict mode is enabled - all code must be fully typed
+- OpenTUI requires Zig and Bun for native terminal rendering
+- Use `bun run ./src/cli.tsx` to run the TUI in development
+- Directory structure: src/{commands,tui,plugins/{agents,trackers}}
+- TUI components go in src/tui/components/
+- Package is ESM (`"type": "module"` in package.json)
+- ABOUTME comment pattern required at top of each source file
+- Use ReactNode return type instead of JSX.Element for component return types
+- OpenTUI uses bundler module resolution - use `moduleResolution: "bundler"` in tsconfig
+- Tracker plugins go in src/plugins/trackers/ with types, registry, base class
+- Agent plugins go in src/plugins/agents/ with types, registry, base class
+- Plugin architecture uses factory pattern + singleton registry
+- CLI subcommands handled in src/cli.tsx with handleSubcommand()
+- Agent plugins support detect(), execute(), interrupt() for AI CLI lifecycle
+- BaseAgentPlugin spawns child processes with streaming output callbacks
+- Configuration stored in YAML at ~/.config/ralph-tui/config.yaml
+- Session/lock files stored in .ralph-session/ relative to cwd
+- Iteration output saved to .ralph-output/ directory
+- Use yaml package for YAML parsing
+- Event-driven architecture for engine-to-TUI communication
+- Commands that use JSX must have .tsx extension (not .ts)
+---
+
+## 2026-01-11 11:20 - ralph-tui-45r.1
+- What was implemented:
+  - Initialized pnpm project with package.json
+  - Installed TypeScript (5.9.3) with strict mode configuration
+  - Installed OpenTUI dependencies (@opentui/core, @opentui/react 0.1.72)
+  - Created directory structure: src/, src/commands/, src/tui/, src/plugins/agents/, src/plugins/trackers/
+  - Set up ESLint 9 with TypeScript support (flat config)
+  - Added build scripts: build, typecheck, lint
+  - Updated .gitignore for Node.js project
+- Files changed:
+  - package.json (new)
+  - tsconfig.json (new)
+  - eslint.config.js (new)
+  - pnpm-lock.yaml (new)
+  - src/index.ts (new)
+  - src/commands/index.ts (new)
+  - src/tui/index.ts (new)
+  - src/plugins/agents/index.ts (new)
+  - src/plugins/trackers/index.ts (new)
+  - .gitignore (updated)
+- **Learnings:**
+  - OpenTUI uses hybrid TypeScript/Zig architecture for performance
+  - Zig requirement should be documented as system prerequisite
+  - ESLint 9 flat config requires @eslint/js and direct plugin imports
+---
+
+## 2026-01-11 - ralph-tui-45r.11
+- What was implemented:
+  - Core TUI layout using OpenTUI React framework
+  - Header component: Ralph status indicator, epic name, elapsed timer, tracker name
+  - Footer component: Keyboard shortcuts, progress bar showing task completion
+  - LeftPanel component: Scrollable task list with status indicators (done/active/pending/blocked)
+  - RightPanel component: Task details view with metadata and iteration output
+  - Main App component with responsive layout (column layout for narrow terminals)
+  - Theme system with Tokyo Night-inspired color palette
+  - Type definitions for task items and component props
+  - CLI entry point with Bun runner
+  - Keyboard navigation (up/down/j/k, q/Escape to quit, p to pause)
+- Files changed:
+  - tsconfig.json (updated: bundler resolution, JSX import source)
+  - package.json (updated: Bun build scripts, dev script)
+  - src/cli.tsx (new)
+  - src/tui/index.ts (updated)
+  - src/tui/theme.ts (new)
+  - src/tui/types.ts (new)
+  - src/tui/components/index.ts (new)
+  - src/tui/components/App.tsx (new)
+  - src/tui/components/Header.tsx (new)
+  - src/tui/components/Footer.tsx (new)
+  - src/tui/components/LeftPanel.tsx (new)
+  - src/tui/components/RightPanel.tsx (new)
+- **Learnings:**
+  - OpenTUI is Bun-native; use `bun build` for bundling
+  - NodeNext module resolution doesn't work with OpenTUI's extensionless type imports
+  - Use ReactNode instead of JSX.Element for component return types with bundler resolution
+  - useTerminalDimensions hook provides responsive layout support
+  - OpenTUI box component uses Yoga flexbox layout engine
+---
+
+## 2026-01-11 - ralph-tui-45r.5
+- What was implemented:
+  - TrackerPlugin TypeScript interface with full CRUD operations
+  - TrackerTask unified type for cross-tracker task representation
+  - BaseTrackerPlugin abstract class with common functionality (filtering, dependency checking)
+  - TrackerRegistry singleton for plugin discovery and lifecycle management
+  - Plugin discovery from ~/.config/ralph-tui/plugins/trackers/ directory
+  - Built-in plugin stubs: json (prd.json), beads, beads-bv
+  - SetupQuestion interface for plugin configuration wizards
+  - CLI command 'ralph-tui plugins trackers' to list available plugins
+- Files changed:
+  - src/plugins/trackers/types.ts (new) - Core type definitions
+  - src/plugins/trackers/base.ts (new) - Abstract base class
+  - src/plugins/trackers/registry.ts (new) - Plugin registry and discovery
+  - src/plugins/trackers/index.ts (updated) - Module exports
+  - src/plugins/trackers/builtin/index.ts (new) - Built-in plugin registration
+  - src/plugins/trackers/builtin/json.ts (new) - JSON tracker stub
+  - src/plugins/trackers/builtin/beads.ts (new) - Beads tracker stub
+  - src/plugins/trackers/builtin/beads-bv.ts (new) - Beads+bv tracker stub
+  - src/commands/plugins.ts (new) - Plugin listing command
+  - src/commands/index.ts (updated) - Export commands
+  - src/cli.tsx (updated) - Handle subcommands
+- **Learnings:**
+  - Factory pattern decouples plugin instantiation from registration
+  - Dynamic imports (await import()) enable runtime plugin discovery
+  - Singleton registry with lazy init avoids loading plugins at import time
+  - TrackerTask provides unified abstraction across all tracker backends
+---
+
+## 2026-01-11 - ralph-tui-45r.4
+- What was implemented:
+  - AgentPlugin TypeScript interface: name, detect(), execute(prompt, files), interrupt()
+  - AgentPluginMeta with streaming, interrupt, fileContext capability flags
+  - BaseAgentPlugin abstract class for CLI-based agents with child process management
+  - AgentRegistry singleton for plugin discovery and lifecycle management
+  - Plugin discovery from ~/.config/ralph-tui/plugins/agents/ directory
+  - Built-in plugin stubs: claude (Claude Code CLI), opencode (OpenCode CLI)
+  - AgentPluginConfig type for YAML config: command path, default flags, timeout
+  - AgentExecutionHandle for controlling running executions
+  - CLI command 'ralph-tui plugins agents' to list available agent plugins
+- Files changed:
+  - src/plugins/agents/types.ts (new) - Core type definitions
+  - src/plugins/agents/base.ts (new) - Abstract base class with process spawning
+  - src/plugins/agents/registry.ts (new) - Plugin registry and discovery
+  - src/plugins/agents/index.ts (updated) - Module exports
+  - src/plugins/agents/builtin/index.ts (new) - Built-in plugin registration
+  - src/plugins/agents/builtin/claude.ts (new) - Claude Code plugin stub
+  - src/plugins/agents/builtin/opencode.ts (new) - OpenCode plugin stub
+  - src/commands/plugins.ts (updated) - Agent plugin listing
+  - src/commands/index.ts (updated) - Export new functions
+  - src/cli.tsx (updated) - Handle 'plugins agents' subcommand
+- **Learnings:**
+  - Agent plugins are fundamentally different from tracker plugins - they execute work (spawn CLIs) vs manage state
+  - The detect() method checks CLI availability (runs --version), returns path and version info
+  - AgentExecutionHandle provides promise + interrupt() + isRunning() for controlling executions
+  - Child process management with timeout and SIGTERM/SIGKILL escalation for clean shutdown
+  - Streaming callbacks (onStdout, onStderr) enable real-time output in TUI
+---
+
+## 2026-01-11 - ralph-tui-45r.27
+- What was implemented:
+  - `ralph-tui run` command with comprehensive CLI argument parsing
+  - Configuration system (src/config/) with YAML loading from ~/.config/ralph-tui/config.yaml
+  - Session and lock management (src/session/) for preventing concurrent instances
+  - Execution engine (src/engine/) with iteration loop: select task → build prompt → run agent → check result
+  - RunApp TUI component that integrates with the execution engine via events
+  - Support for --epic, --prd, --agent, --model, --tracker, --iterations, --resume, --force, --headless flags
+  - <promise>COMPLETE</promise> detection in agent output to signal task completion
+  - Iteration output saved to .ralph-output/ directory
+- Files changed:
+  - src/commands/run.tsx (new) - Run command implementation
+  - src/commands/index.ts (updated) - Export run command
+  - src/cli.tsx (updated) - Add run subcommand handling
+  - src/config/types.ts (new) - Configuration type definitions
+  - src/config/index.ts (new) - Config loading and validation
+  - src/session/types.ts (new) - Session type definitions
+  - src/session/index.ts (new) - Lock and session management
+  - src/engine/types.ts (new) - Engine event and state types
+  - src/engine/index.ts (new) - ExecutionEngine class with iteration loop
+  - src/tui/components/RunApp.tsx (new) - TUI component for run mode
+  - src/tui/components/index.ts (updated) - Export RunApp
+  - package.json (updated) - Added yaml dependency
+  - bun.lock (new) - Lockfile migrated from pnpm
+- **Learnings:**
+  - JSX files need .tsx extension for TypeScript to recognize JSX syntax
+  - Event-driven architecture decouples engine logic from TUI rendering
+  - Lock files with PID tracking enable stale lock detection
+  - The yaml package provides YAML parsing for config files
+  - Session persistence enables resume capability across process restarts
+---
+
+## 2026-01-11 - ralph-tui-45r.9
+- What was implemented:
+  - Full BeadsTrackerPlugin implementing TrackerPlugin interface
+  - detect(): Check for .beads/ directory and bd binary availability
+  - getTasks(): Execute bd list --json with parent/status/labels filters
+  - getTask(): Execute bd show ID --json for single task detail with dependencies
+  - completeTask(): Execute bd update ID --status=closed with reason
+  - updateTaskStatus(): Update task status via bd update command
+  - sync(): Bidirectional sync with bd sync command
+  - isComplete(): Check if all epic children are closed
+  - Setup questions: epicId (required), beadsDir, labels
+  - Status mapping between bd (closed/open) and TrackerTask (completed/open)
+  - BeadJson interface matching bd JSON output structure
+- Files changed:
+  - src/plugins/trackers/builtin/beads.ts (updated from stub to full implementation)
+- **Learnings:**
+  - CLI wrapper pattern is preferable to direct file parsing - lets bd handle format evolution
+  - bd dependencies array includes both "blocks" (true deps) and "parent-child" relationships
+  - Two-tier filtering: push simple filters (status, labels) to CLI, complex filters (ready) in memory
+  - bd --json output is consistent between list and show commands
+  - bd update uses --status flag not --close_reason for closing beads
+---
+
+## 2026-01-11 - ralph-tui-45r.22
+- What was implemented:
+  - Error handling strategies: retry, skip, abort (configurable via ErrorHandlingConfig)
+  - ErrorHandlingStrategy and ErrorHandlingConfig types in engine/types.ts
+  - CLI options --on-error and --max-retries in RuntimeOptions
+  - DEFAULT_ERROR_HANDLING constant with sensible defaults (skip, 3 retries, 5s delay)
+  - New engine events: iteration:retrying, iteration:skipped
+  - Enhanced iteration:failed event with 'action' field indicating retry/skip/abort
+  - isTaskReady(id) method added to TrackerPlugin interface
+  - Retry logic with configurable maxRetries and retryDelayMs
+  - Skip logic that tracks skipped tasks to avoid re-selection
+  - Abort logic that stops engine immediately on failure
+- Files changed:
+  - src/engine/types.ts (updated) - Added ErrorHandlingStrategy, ErrorHandlingConfig, new event types
+  - src/engine/index.ts (updated) - Added runIterationWithErrorHandling, getNextAvailableTask, retry/skip tracking
+  - src/config/types.ts (updated) - Added onError, maxRetries to RuntimeOptions, errorHandling to RalphConfig
+  - src/config/index.ts (updated) - Build errorHandling config with CLI overrides
+  - src/plugins/trackers/types.ts (updated) - Added isTaskReady(id) method to interface
+  - src/plugins/trackers/base.ts (updated) - Implemented isTaskReady(id), renamed helper to checkTaskReady
+- **Learnings:**
+  - Error handling strategies should be pluggable with sensible defaults (skip is safest for autonomous agents)
+  - Retry logic needs state tracking (retryCountMap) to persist across recursive calls
+  - Skipped tasks need a Set to prevent re-selection in the same session
+  - When max retries exceeded, fallback to skip is more graceful than abort for autonomous loops
+  - Event-driven design allows TUI to display all error handling states without tight coupling
+---
+
+## 2026-01-11 - ralph-tui-45r.8
+- What was implemented:
+  - Full JsonTrackerPlugin for prd.json file-based task tracking
+  - PrdJson and PrdUserStory interfaces matching the prd.json format spec
+  - File I/O with caching (1 second TTL) for read performance
+  - getTasks(): Read user stories with passes field mapped to status
+  - getNextTask(): Select highest priority open task with no unresolved dependencies
+  - completeTask(): Update passes: true in file with optional reason/notes
+  - updateTaskStatus(): Update passes field based on TrackerTaskStatus
+  - isComplete(): Check all stories have passes: true
+  - Setup questions: path to prd.json file, git branch name
+  - Validation: file exists, valid JSON, has userStories array
+  - Priority mapping: prd 1-based to TrackerTask 0-4 scale
+  - Dependency support via dependsOn field for story-to-story deps
+- Files changed:
+  - src/plugins/trackers/builtin/json.ts (updated from stub to full implementation)
+- **Learnings:**
+  - File-based trackers are simpler than CLI wrappers but require careful caching
+  - The passes boolean field maps directly to completed/open status (no in_progress)
+  - Caching with TTL prevents excessive file reads during rapid getTasks() calls
+  - JSON pretty-printing (2-space indent) maintains human readability of prd.json
+  - The prd.json format is intentionally simpler than beads - no sync, no CLI deps
+---
+
+## 2026-01-11 - ralph-tui-45r.12
+- What was implemented:
+  - US-012: Task List View with full acceptance criteria
+  - Updated status indicators to match spec: ✓ (done), ▶ (active), ○ (pending), ⊘ (blocked)
+  - Task ID displayed in muted color alongside truncated task title
+  - Added truncateText() helper for graceful text truncation with ellipsis
+  - Footer updated to show "X/Y complete" format instead of just "X/Y"
+  - Enter key handling in App and RunApp to drill into task details
+  - Added onTaskDrillDown callback prop for parent components to handle navigation
+- Files changed:
+  - src/tui/theme.ts (updated) - Changed status indicators for active (▶) and blocked (⊘)
+  - src/tui/types.ts (updated) - Added onTaskDrillDown callback to LeftPanelProps
+  - src/tui/components/LeftPanel.tsx (updated) - Task ID display, truncation support, maxWidth prop
+  - src/tui/components/Footer.tsx (updated) - "complete" suffix in task counter
+  - src/tui/components/App.tsx (updated) - Enter key handling, onTaskDrillDown prop
+  - src/tui/components/RunApp.tsx (updated) - Enter key handling, onTaskDrillDown prop
+- **Learnings:**
+  - OpenTUI keyboard events use 'return' not 'enter' for the Enter key (but we handle both for safety)
+  - Task truncation needs to account for status indicator + ID + spaces when calculating available width
+  - The callback pattern (onTaskDrillDown) keeps components decoupled - LeftPanel doesn't need to know what happens on drill-down
+  - Having both 'return' and 'enter' cases handles different terminal emulator behaviors
+---
+
+## 2026-01-11 - ralph-tui-45r.14
+- What was implemented:
+  - US-014: Iteration History View with full acceptance criteria
+  - IterationHistoryView component displaying all iterations with key events
+  - Status indicators: ✓ (completed), ▶ (running), ○ (pending), ✗ (failed), ⊘ (interrupted), ⊖ (skipped)
+  - Each row shows: iteration number ("Iteration 1 of 10"), task ID, duration, outcome
+  - Integrated with RunApp via 'i' key toggle between Tasks and Iterations views
+  - Keyboard navigation (up/down/j/k) through iterations list
+  - Enter key drills into iteration details via onIterationDrillDown callback
+  - Pending iterations shown as placeholders when not yet executed
+- Files changed:
+  - src/tui/components/IterationHistoryView.tsx (new) - Iteration history display component
+  - src/tui/components/index.ts (updated) - Export IterationHistoryView
+  - src/tui/types.ts (updated) - Added IterationHistoryPanelProps, IterationResult import
+  - src/tui/components/RunApp.tsx (updated) - View mode toggle, iteration state, navigation
+- **Learnings:**
+  - Extended IterationStatus type with DisplayIterationStatus to handle 'pending' for UI purposes
+  - Discriminated unions (type: 'result' | 'pending') enable type-safe rendering of mixed lists
+  - Separate selectedIndex states (tasks vs iterations) prevent confusion when switching views
+  - View mode toggle pattern keeps TUI responsive without needing separate screens
+---
+
+## 2026-01-11 - ralph-tui-45r.19
+- What was implemented:
+  - US-019: Session Persistence with full acceptance criteria
+  - PersistedSessionState type for saving: iteration, task statuses, start time, pause state, tracker state
+  - Session file saved to .ralph-tui-session.json in project root
+  - Session state saved automatically after each iteration completes
+  - `ralph-tui resume` command to continue from saved state
+  - `ralph-tui status` command to check if resumable session exists
+  - Prompt shown when existing session found on `ralph-tui run`
+  - Session file cleaned up automatically on successful completion
+- Files changed:
+  - src/session/persistence.ts (new) - Session persistence types and functions
+  - src/session/index.ts (updated) - Export persistence module
+  - src/commands/status.ts (new) - Status command implementation
+  - src/commands/resume.tsx (new) - Resume command implementation
+  - src/commands/index.ts (updated) - Export new commands
+  - src/cli.tsx (updated) - Handle resume and status subcommands
+  - src/commands/run.tsx (updated) - Integrate session persistence
+- **Learnings:**
+  - Session persistence uses a separate file (.ralph-tui-session.json) from the lock system (.ralph-session/)
+  - State updates use immutable patterns with spread operators for safe concurrent access
+  - Event-driven iteration completion hooks allow persistence without tight coupling
+  - Session cleanup on completion prevents stale data; interrupted sessions remain resumable
+---
