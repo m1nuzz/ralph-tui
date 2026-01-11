@@ -12,6 +12,14 @@ import { Header } from './Header.js';
 import { Footer } from './Footer.js';
 import { LeftPanel } from './LeftPanel.js';
 import { RightPanel } from './RightPanel.js';
+import { TaskDetailView } from './TaskDetailView.js';
+
+/**
+ * View modes for the App component
+ * - 'list': Show the task list with details panel (default)
+ * - 'detail': Show full-screen task detail view
+ */
+type ViewMode = 'list' | 'detail';
 
 /**
  * Props for the App component
@@ -77,6 +85,8 @@ export function App({ initialState, onQuit, onTaskDrillDown }: AppProps): ReactN
     ...initialState,
   }));
   const [elapsedTime, setElapsedTime] = useState(state.header.elapsedTime);
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [detailTask, setDetailTask] = useState<TaskItem | null>(null);
 
   // Update elapsed time every second
   useEffect(() => {
@@ -93,14 +103,25 @@ export function App({ initialState, onQuit, onTaskDrillDown }: AppProps): ReactN
 
       switch (key.name) {
         case 'q':
-        case 'escape':
+          // Quit the application
           onQuit?.();
           process.exit(0);
           break;
 
+        case 'escape':
+          // In detail view, Esc goes back to list view
+          if (viewMode === 'detail') {
+            setViewMode('list');
+            setDetailTask(null);
+          } else {
+            onQuit?.();
+            process.exit(0);
+          }
+          break;
+
         case 'up':
         case 'k':
-          if (selectedIndex > 0) {
+          if (viewMode === 'list' && selectedIndex > 0) {
             const newIndex = selectedIndex - 1;
             setState((prev) => ({
               ...prev,
@@ -108,11 +129,12 @@ export function App({ initialState, onQuit, onTaskDrillDown }: AppProps): ReactN
               rightPanel: { ...prev.rightPanel, selectedTask: tasks[newIndex] ?? null },
             }));
           }
+          // No navigation in detail view (scrollbox handles it)
           break;
 
         case 'down':
         case 'j':
-          if (selectedIndex < tasks.length - 1) {
+          if (viewMode === 'list' && selectedIndex < tasks.length - 1) {
             const newIndex = selectedIndex + 1;
             setState((prev) => ({
               ...prev,
@@ -120,6 +142,7 @@ export function App({ initialState, onQuit, onTaskDrillDown }: AppProps): ReactN
               rightPanel: { ...prev.rightPanel, selectedTask: tasks[newIndex] ?? null },
             }));
           }
+          // No navigation in detail view (scrollbox handles it)
           break;
 
         case 'p':
@@ -133,16 +156,27 @@ export function App({ initialState, onQuit, onTaskDrillDown }: AppProps): ReactN
           }));
           break;
 
+        case 't':
+          // Switch to list view (from any view)
+          setViewMode('list');
+          setDetailTask(null);
+          break;
+
         case 'return':
         case 'enter':
-          // Drill into selected task details
-          if (tasks[selectedIndex]) {
-            onTaskDrillDown?.(tasks[selectedIndex]);
+          if (viewMode === 'list') {
+            // Drill into selected task details
+            if (tasks[selectedIndex]) {
+              setDetailTask(tasks[selectedIndex]);
+              setViewMode('detail');
+              onTaskDrillDown?.(tasks[selectedIndex]);
+            }
           }
+          // In detail view, Enter does nothing
           break;
       }
     },
-    [state.leftPanel, onQuit, onTaskDrillDown]
+    [state.leftPanel, onQuit, onTaskDrillDown, viewMode]
   );
 
   useKeyboard(handleKeyboard);
@@ -178,15 +212,28 @@ export function App({ initialState, onQuit, onTaskDrillDown }: AppProps): ReactN
           height: contentHeight,
         }}
       >
-        <LeftPanel
-          tasks={state.leftPanel.tasks}
-          selectedIndex={state.leftPanel.selectedIndex}
-        />
-        <RightPanel
-          selectedTask={state.rightPanel.selectedTask}
-          currentIteration={state.rightPanel.currentIteration}
-          iterationOutput={state.rightPanel.iterationOutput}
-        />
+        {viewMode === 'detail' && detailTask ? (
+          // Full-screen task detail view
+          <TaskDetailView
+            task={detailTask}
+            onBack={() => {
+              setViewMode('list');
+              setDetailTask(null);
+            }}
+          />
+        ) : (
+          <>
+            <LeftPanel
+              tasks={state.leftPanel.tasks}
+              selectedIndex={state.leftPanel.selectedIndex}
+            />
+            <RightPanel
+              selectedTask={state.rightPanel.selectedTask}
+              currentIteration={state.rightPanel.currentIteration}
+              iterationOutput={state.rightPanel.iterationOutput}
+            />
+          </>
+        )}
       </box>
 
       {/* Footer */}

@@ -14,14 +14,16 @@ import { Footer } from './Footer.js';
 import { LeftPanel } from './LeftPanel.js';
 import { RightPanel } from './RightPanel.js';
 import { IterationHistoryView } from './IterationHistoryView.js';
+import { TaskDetailView } from './TaskDetailView.js';
 import type { ExecutionEngine, EngineEvent, IterationResult } from '../../engine/index.js';
 
 /**
  * View modes for the RunApp component
  * - 'tasks': Show the task list (default)
  * - 'iterations': Show the iteration history
+ * - 'task-detail': Show detailed view of a single task
  */
-type ViewMode = 'tasks' | 'iterations';
+type ViewMode = 'tasks' | 'iterations' | 'task-detail';
 
 /**
  * Props for the RunApp component
@@ -80,6 +82,8 @@ export function RunApp({ engine, onQuit, onTaskDrillDown, onIterationDrillDown }
   const [totalIterations] = useState(10); // Default max iterations for display
   const [viewMode, setViewMode] = useState<ViewMode>('tasks');
   const [iterationSelectedIndex, setIterationSelectedIndex] = useState(0);
+  // Task detail view state
+  const [detailTask, setDetailTask] = useState<TaskItem | null>(null);
 
   // Subscribe to engine events
   useEffect(() => {
@@ -214,26 +218,38 @@ export function RunApp({ engine, onQuit, onTaskDrillDown, onIterationDrillDown }
     (key: { name: string }) => {
       switch (key.name) {
         case 'q':
-        case 'escape':
+          // Quit the application
           onQuit?.();
+          break;
+
+        case 'escape':
+          // In detail view, Esc goes back to list view
+          if (viewMode === 'task-detail') {
+            setViewMode('tasks');
+            setDetailTask(null);
+          } else {
+            onQuit?.();
+          }
           break;
 
         case 'up':
         case 'k':
           if (viewMode === 'tasks') {
             setSelectedIndex((prev) => Math.max(0, prev - 1));
-          } else {
+          } else if (viewMode === 'iterations') {
             setIterationSelectedIndex((prev) => Math.max(0, prev - 1));
           }
+          // No navigation in task-detail view (scrollbox handles it)
           break;
 
         case 'down':
         case 'j':
           if (viewMode === 'tasks') {
             setSelectedIndex((prev) => Math.min(tasks.length - 1, prev + 1));
-          } else {
+          } else if (viewMode === 'iterations') {
             setIterationSelectedIndex((prev) => Math.min(iterationHistoryLength - 1, prev + 1));
           }
+          // No navigation in task-detail view (scrollbox handles it)
           break;
 
         case 'p':
@@ -253,13 +269,16 @@ export function RunApp({ engine, onQuit, onTaskDrillDown, onIterationDrillDown }
           break;
 
         case 'i':
-          // Toggle between tasks and iterations view
-          setViewMode((prev) => (prev === 'tasks' ? 'iterations' : 'tasks'));
+          // Toggle between tasks and iterations view (only if not in detail view)
+          if (viewMode !== 'task-detail') {
+            setViewMode((prev) => (prev === 'tasks' ? 'iterations' : 'tasks'));
+          }
           break;
 
         case 't':
-          // Switch to tasks view
+          // Switch to tasks view (from any view)
           setViewMode('tasks');
+          setDetailTask(null);
           break;
 
         case 'return':
@@ -267,14 +286,17 @@ export function RunApp({ engine, onQuit, onTaskDrillDown, onIterationDrillDown }
           if (viewMode === 'tasks') {
             // Drill into selected task details
             if (tasks[selectedIndex]) {
+              setDetailTask(tasks[selectedIndex]);
+              setViewMode('task-detail');
               onTaskDrillDown?.(tasks[selectedIndex]);
             }
-          } else {
+          } else if (viewMode === 'iterations') {
             // Drill into selected iteration details
             if (iterations[iterationSelectedIndex]) {
               onIterationDrillDown?.(iterations[iterationSelectedIndex]);
             }
           }
+          // In task-detail view, Enter does nothing
           break;
       }
     },
@@ -323,22 +345,40 @@ export function RunApp({ engine, onQuit, onTaskDrillDown, onIterationDrillDown }
           height: contentHeight,
         }}
       >
-        {viewMode === 'tasks' ? (
-          <LeftPanel tasks={tasks} selectedIndex={selectedIndex} />
-        ) : (
-          <IterationHistoryView
-            iterations={iterations}
-            totalIterations={totalIterations}
-            selectedIndex={iterationSelectedIndex}
-            runningIteration={currentIteration}
-            width={isCompact ? width : Math.floor(width * 0.5)}
+        {viewMode === 'task-detail' && detailTask ? (
+          // Full-screen task detail view
+          <TaskDetailView
+            task={detailTask}
+            onBack={() => {
+              setViewMode('tasks');
+              setDetailTask(null);
+            }}
           />
+        ) : viewMode === 'tasks' ? (
+          <>
+            <LeftPanel tasks={tasks} selectedIndex={selectedIndex} />
+            <RightPanel
+              selectedTask={selectedTask}
+              currentIteration={currentIteration}
+              iterationOutput={currentOutput}
+            />
+          </>
+        ) : (
+          <>
+            <IterationHistoryView
+              iterations={iterations}
+              totalIterations={totalIterations}
+              selectedIndex={iterationSelectedIndex}
+              runningIteration={currentIteration}
+              width={isCompact ? width : Math.floor(width * 0.5)}
+            />
+            <RightPanel
+              selectedTask={selectedTask}
+              currentIteration={currentIteration}
+              iterationOutput={currentOutput}
+            />
+          </>
         )}
-        <RightPanel
-          selectedTask={selectedTask}
-          currentIteration={currentIteration}
-          iterationOutput={currentOutput}
-        />
       </box>
 
       {/* Footer */}

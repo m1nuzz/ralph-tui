@@ -5,16 +5,46 @@
 
 import type { TaskStatus, RalphStatus } from './theme.js';
 import type { IterationResult } from '../engine/types.js';
+import type { TaskPriority } from '../plugins/trackers/types.js';
+
+// Re-export TaskPriority for convenience
+export type { TaskPriority };
 
 /**
- * Task item displayed in the task list
+ * Task item displayed in the task list and detail view.
+ * Extended from TrackerTask for full detail view support.
  */
 export interface TaskItem {
+  /** Unique identifier */
   id: string;
+  /** Human-readable task title */
   title: string;
+  /** Current status */
   status: TaskStatus;
+  /** Detailed description or body text */
   description?: string;
+  /** Current iteration/sprint number */
   iteration?: number;
+  /** Priority level (0-4, where 0 is critical) */
+  priority?: TaskPriority;
+  /** Labels or tags associated with the task */
+  labels?: string[];
+  /** Task type (e.g., 'feature', 'bug', 'task', 'epic') */
+  type?: string;
+  /** IDs of tasks this task depends on (blockers) */
+  dependsOn?: string[];
+  /** IDs of tasks that depend on this task */
+  blocks?: string[];
+  /** Completion notes or close reason (if closed) */
+  closeReason?: string;
+  /** Acceptance criteria as markdown text or list */
+  acceptanceCriteria?: string;
+  /** Assigned user or owner */
+  assignee?: string;
+  /** Creation timestamp (ISO 8601) */
+  createdAt?: string;
+  /** Last update timestamp (ISO 8601) */
+  updatedAt?: string;
 }
 
 /**
@@ -93,4 +123,14 @@ export interface IterationHistoryPanelProps {
   runningIteration: number;
   /** Callback when Enter is pressed to drill into iteration details */
   onIterationDrillDown?: (iteration: IterationResult) => void;
+}
+
+/**
+ * Props for the TaskDetailView component
+ */
+export interface TaskDetailViewProps {
+  /** The task to display details for */
+  task: TaskItem;
+  /** Callback when Esc is pressed to return to list view */
+  onBack?: () => void;
 }

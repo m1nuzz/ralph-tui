@@ -13,3 +13,4 @@ export { LeftPanel } from './LeftPanel.js';
 export { RightPanel } from './RightPanel.js';
 export { IterationHistoryView } from './IterationHistoryView.js';
 export type { IterationHistoryViewProps } from './IterationHistoryView.js';
+export { TaskDetailView } from './TaskDetailView.js';
