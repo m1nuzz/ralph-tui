@@ -193,7 +193,7 @@ export function EpicLoaderOverlay({
         bottom: 0,
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        backgroundColor: '#00000080', // 50% opacity black (OpenTUI doesn't support rgba syntax)
       }}
     >
       <box

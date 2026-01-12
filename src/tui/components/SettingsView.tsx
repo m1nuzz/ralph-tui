@@ -393,7 +393,7 @@ export function SettingsView({
         height: '100%',
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: 'rgba(0, 0, 0, 0.7)',
+        backgroundColor: '#000000B3', // 70% opacity black (OpenTUI doesn't support rgba syntax)
       }}
     >
       <box
