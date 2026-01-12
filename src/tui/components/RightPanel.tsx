@@ -6,11 +6,127 @@
  */
 
 import type { ReactNode } from 'react';
+import { useMemo } from 'react';
 import { colors, getTaskStatusColor, getTaskStatusIndicator } from '../theme.js';
-import type { RightPanelProps, DetailsViewMode, IterationTimingInfo, SubagentTreeNode } from '../types.js';
+import type { RightPanelProps, DetailsViewMode, IterationTimingInfo, SubagentTreeNode, TaskPriority } from '../types.js';
 import type { SubagentDetailLevel } from '../../config/types.js';
 import { formatElapsedTime } from '../theme.js';
 import { SubagentSections } from './SubagentSection.js';
+import { parseAgentOutput } from '../output-parser.js';
+
+/**
+ * Priority label mapping for display
+ */
+const priorityLabels: Record<TaskPriority, string> = {
+  0: 'P0 - Critical',
+  1: 'P1 - High',
+  2: 'P2 - Medium',
+  3: 'P3 - Low',
+  4: 'P4 - Backlog',
+};
+
+/**
+ * Get color for priority display
+ */
+function getPriorityColor(priority: TaskPriority): string {
+  switch (priority) {
+    case 0:
+      return colors.status.error;
+    case 1:
+      return colors.status.warning;
+    case 2:
+      return colors.fg.primary;
+    case 3:
+      return colors.fg.secondary;
+    case 4:
+      return colors.fg.muted;
+  }
+}
+
+/**
+ * Parse acceptance criteria from description, dedicated field, or metadata array.
+ * Looks for markdown checklist items (- [ ] or - [x])
+ * JSON tracker stores criteria in metadata.acceptanceCriteria as string array.
+ */
+function parseAcceptanceCriteria(
+  description?: string,
+  acceptanceCriteria?: string,
+  metadataCriteria?: unknown
+): Array<{ text: string; checked: boolean }> {
+  // If metadata contains criteria array (from JSON tracker), use that
+  if (Array.isArray(metadataCriteria) && metadataCriteria.length > 0) {
+    return metadataCriteria
+      .filter((c): c is string => typeof c === 'string')
+      .map((text) => ({ text, checked: false }));
+  }
+
+  const content = acceptanceCriteria || description || '';
+  const lines = content.split('\n');
+  const criteria: Array<{ text: string; checked: boolean }> = [];
+
+  // Look for acceptance criteria section
+  let inCriteriaSection = false;
+
+  for (const line of lines) {
+    // Check for section header
+    if (line.toLowerCase().includes('acceptance criteria')) {
+      inCriteriaSection = true;
+      continue;
+    }
+
+    // Parse checklist items (anywhere in content if no section, or only in section)
+    const checkboxMatch = line.match(/^\s*-\s*\[([ xX])\]\s*(.+)$/);
+    if (checkboxMatch) {
+      criteria.push({
+        checked: checkboxMatch[1].toLowerCase() === 'x',
+        text: checkboxMatch[2].trim(),
+      });
+    }
+
+    // Also accept bullet points in the criteria section
+    if (inCriteriaSection) {
+      const bulletMatch = line.match(/^\s*[-*]\s+(.+)$/);
+      if (bulletMatch && !checkboxMatch) {
+        criteria.push({
+          checked: false,
+          text: bulletMatch[1].trim(),
+        });
+      }
+    }
+  }
+
+  return criteria;
+}
+
+/**
+ * Extract description without acceptance criteria section
+ */
+function extractDescription(description?: string): string {
+  if (!description) return '';
+
+  const lines = description.split('\n');
+  const result: string[] = [];
+  let inCriteriaSection = false;
+
+  for (const line of lines) {
+    if (line.toLowerCase().includes('acceptance criteria')) {
+      inCriteriaSection = true;
+      continue;
+    }
+
+    // Stop including lines once we hit the acceptance criteria section
+    // unless we encounter another section header
+    if (inCriteriaSection && line.match(/^#+\s/)) {
+      inCriteriaSection = false;
+    }
+
+    if (!inCriteriaSection) {
+      result.push(line);
+    }
+  }
+
+  return result.join('\n').trim();
+}
 
 /**
  * Format an ISO 8601 timestamp to a human-readable time string.
@@ -64,7 +180,9 @@ function NoSelection(): ReactNode {
 }
 
 /**
- * Task metadata view - shows task title, ID, status, description, dependencies
+ * Full task details view - shows comprehensive task information including
+ * metadata, description, acceptance criteria, dependencies, and timestamps.
+ * This replaces the previous minimal TaskMetadataView.
  */
 function TaskMetadataView({
   task,
@@ -73,86 +191,235 @@ function TaskMetadataView({
 }): ReactNode {
   const statusColor = getTaskStatusColor(task.status);
   const statusIndicator = getTaskStatusIndicator(task.status);
+  // Check metadata for acceptance criteria (JSON tracker stores it there)
+  const metadataCriteria = task.metadata?.acceptanceCriteria;
+  const criteria = parseAcceptanceCriteria(task.description, undefined, metadataCriteria);
+  const cleanDescription = extractDescription(task.description);
 
   return (
     <box style={{ flexDirection: 'column', padding: 1, flexGrow: 1 }}>
-      {/* Task title and status */}
-      <box style={{ marginBottom: 1 }}>
-        <text>
-          <span fg={statusColor}>{statusIndicator}</span>
-          <span fg={colors.fg.primary}> {task.title}</span>
-        </text>
-      </box>
-
-      {/* Task metadata */}
-      <box style={{ flexDirection: 'row', gap: 2, marginBottom: 1 }}>
-        <text fg={colors.fg.muted}>
-          ID: <span fg={colors.fg.secondary}>{task.id}</span>
-        </text>
-        <text fg={colors.fg.muted}>
-          Status: <span fg={statusColor}>{task.status}</span>
-        </text>
-        {task.iteration !== undefined && (
-          <text fg={colors.fg.muted}>
-            Iteration: <span fg={colors.accent.primary}>{task.iteration}</span>
+      <scrollbox style={{ flexGrow: 1 }}>
+        {/* Task title and status */}
+        <box style={{ marginBottom: 1 }}>
+          <text>
+            <span fg={statusColor}>{statusIndicator}</span>
+            <span fg={colors.fg.primary}> {task.title}</span>
           </text>
-        )}
-      </box>
+        </box>
 
-      {/* Task description - full height scrollable */}
-      <box
-        title="Description"
-        style={{
-          flexGrow: 1,
-          border: true,
-          borderColor: colors.border.normal,
-          backgroundColor: colors.bg.secondary,
-        }}
-      >
-        <scrollbox style={{ flexGrow: 1, padding: 1 }}>
-          {task.description ? (
-            <text fg={colors.fg.secondary}>{task.description}</text>
-          ) : (
-            <text fg={colors.fg.muted}>No description</text>
-          )}
-        </scrollbox>
-      </box>
+        {/* Task ID */}
+        <box style={{ marginBottom: 1 }}>
+          <text fg={colors.fg.muted}>ID: {task.id}</text>
+        </box>
 
-      {/* Dependencies section */}
-      {task.dependsOn && task.dependsOn.length > 0 && (
+        {/* Metadata section - compact row of key info */}
         <box
-          title="Dependencies"
           style={{
-            marginTop: 1,
+            marginBottom: 1,
+            padding: 1,
+            backgroundColor: colors.bg.secondary,
             border: true,
             borderColor: colors.border.muted,
-            padding: 1,
+            flexDirection: 'column',
           }}
         >
-          <text fg={colors.fg.secondary}>
-            {task.dependsOn.join(', ')}
-          </text>
-        </box>
-      )}
+          {/* Status row */}
+          <box style={{ flexDirection: 'row', marginBottom: 0 }}>
+            <text fg={colors.fg.muted}>Status: </text>
+            <text fg={statusColor}>{task.status}</text>
+          </box>
 
-      {/* Blockers section (if blocked) */}
-      {task.blockedByTasks && task.blockedByTasks.length > 0 && (
-        <box
-          title="Blocked By"
-          style={{
-            marginTop: 1,
-            border: true,
-            borderColor: colors.task.blocked,
-            padding: 1,
-          }}
-        >
-          {task.blockedByTasks.map((blocker) => (
-            <text key={blocker.id} fg={colors.fg.secondary}>
-              {blocker.id}: {blocker.title} ({blocker.status})
-            </text>
-          ))}
+          {/* Priority row */}
+          {task.priority !== undefined && (
+            <box style={{ flexDirection: 'row', marginBottom: 0 }}>
+              <text fg={colors.fg.muted}>Priority: </text>
+              <text fg={getPriorityColor(task.priority)}>{priorityLabels[task.priority]}</text>
+            </box>
+          )}
+
+          {/* Type row */}
+          {task.type && (
+            <box style={{ flexDirection: 'row', marginBottom: 0 }}>
+              <text fg={colors.fg.muted}>Type: </text>
+              <text fg={colors.fg.secondary}>{task.type}</text>
+            </box>
+          )}
+
+          {/* Assignee row */}
+          {task.assignee && (
+            <box style={{ flexDirection: 'row', marginBottom: 0 }}>
+              <text fg={colors.fg.muted}>Assignee: </text>
+              <text fg={colors.fg.secondary}>{task.assignee}</text>
+            </box>
+          )}
+
+          {/* Labels row */}
+          {task.labels && task.labels.length > 0 && (
+            <box style={{ flexDirection: 'row', marginBottom: 0 }}>
+              <text fg={colors.fg.muted}>Labels: </text>
+              <text>
+                {task.labels.map((label, i) => (
+                  <span key={label}>
+                    <span fg={colors.accent.secondary}>{label}</span>
+                    {i < task.labels!.length - 1 ? ', ' : ''}
+                  </span>
+                ))}
+              </text>
+            </box>
+          )}
+
+          {/* Iteration row */}
+          {task.iteration !== undefined && (
+            <box style={{ flexDirection: 'row', marginBottom: 0 }}>
+              <text fg={colors.fg.muted}>Iteration: </text>
+              <text fg={colors.accent.primary}>{task.iteration}</text>
+            </box>
+          )}
         </box>
-      )}
+
+        {/* Description section */}
+        {cleanDescription && (
+          <box style={{ marginBottom: 1 }}>
+            <box style={{ marginBottom: 0 }}>
+              <text fg={colors.accent.primary}>Description</text>
+            </box>
+            <box
+              style={{
+                padding: 1,
+                backgroundColor: colors.bg.tertiary,
+                border: true,
+                borderColor: colors.border.muted,
+              }}
+            >
+              <text fg={colors.fg.secondary}>{cleanDescription}</text>
+            </box>
+          </box>
+        )}
+
+        {/* Acceptance criteria section */}
+        {criteria.length > 0 && (
+          <box style={{ marginBottom: 1 }}>
+            <box style={{ marginBottom: 0 }}>
+              <text fg={colors.accent.primary}>Acceptance Criteria</text>
+            </box>
+            <box
+              style={{
+                padding: 1,
+                backgroundColor: colors.bg.secondary,
+                border: true,
+                borderColor: colors.border.muted,
+                flexDirection: 'column',
+              }}
+            >
+              {criteria.map((item, index) => (
+                <box key={index} style={{ flexDirection: 'row', marginBottom: 0 }}>
+                  <text>
+                    <span fg={item.checked ? colors.status.success : colors.fg.muted}>
+                      {item.checked ? '[x]' : '[ ]'}
+                    </span>
+                    <span fg={item.checked ? colors.fg.muted : colors.fg.secondary}>
+                      {' '}
+                      {item.text}
+                    </span>
+                  </text>
+                </box>
+              ))}
+            </box>
+          </box>
+        )}
+
+        {/* Dependencies section */}
+        {((task.dependsOn && task.dependsOn.length > 0) ||
+          (task.blocks && task.blocks.length > 0) ||
+          (task.blockedByTasks && task.blockedByTasks.length > 0)) && (
+          <box style={{ marginBottom: 1 }}>
+            <box style={{ marginBottom: 0 }}>
+              <text fg={colors.accent.primary}>Dependencies</text>
+            </box>
+            <box
+              style={{
+                padding: 1,
+                backgroundColor: colors.bg.secondary,
+                border: true,
+                borderColor: colors.border.muted,
+                flexDirection: 'column',
+              }}
+            >
+              {/* Show detailed blocker info if available (with title and status) */}
+              {task.blockedByTasks && task.blockedByTasks.length > 0 && (
+                <box style={{ marginBottom: 1 }}>
+                  <text fg={colors.status.error}>⊘ Blocked by (unresolved):</text>
+                  {task.blockedByTasks.map((blocker) => (
+                    <text key={blocker.id} fg={colors.fg.secondary}>
+                      {'  '}- {blocker.id}: {blocker.title}
+                      <span fg={colors.fg.muted}> [{blocker.status}]</span>
+                    </text>
+                  ))}
+                </box>
+              )}
+
+              {/* Fallback to dependsOn IDs if blockedByTasks not available */}
+              {(!task.blockedByTasks || task.blockedByTasks.length === 0) &&
+                task.dependsOn && task.dependsOn.length > 0 && (
+                <box style={{ marginBottom: 1 }}>
+                  <text fg={colors.status.warning}>Depends on:</text>
+                  {task.dependsOn.map((dep) => (
+                    <text key={dep} fg={colors.fg.secondary}>
+                      {'  '}- {dep}
+                    </text>
+                  ))}
+                </box>
+              )}
+
+              {task.blocks && task.blocks.length > 0 && (
+                <box>
+                  <text fg={colors.accent.tertiary}>Blocks:</text>
+                  {task.blocks.map((dep) => (
+                    <text key={dep} fg={colors.fg.secondary}>
+                      {'  '}- {dep}
+                    </text>
+                  ))}
+                </box>
+              )}
+            </box>
+          </box>
+        )}
+
+        {/* Completion notes section */}
+        {task.closeReason && (
+          <box style={{ marginBottom: 1 }}>
+            <box style={{ marginBottom: 0 }}>
+              <text fg={colors.accent.primary}>Completion Notes</text>
+            </box>
+            <box
+              style={{
+                padding: 1,
+                backgroundColor: colors.bg.tertiary,
+                border: true,
+                borderColor: colors.status.success,
+              }}
+            >
+              <text fg={colors.fg.secondary}>{task.closeReason}</text>
+            </box>
+          </box>
+        )}
+
+        {/* Timestamps */}
+        {(task.createdAt || task.updatedAt) && (
+          <box style={{ marginTop: 1 }}>
+            {task.createdAt && (
+              <text fg={colors.fg.dim}>
+                Created: {new Date(task.createdAt).toLocaleString()}
+              </text>
+            )}
+            {task.updatedAt && (
+              <text fg={colors.fg.dim}>
+                {' '}| Updated: {new Date(task.updatedAt).toLocaleString()}
+              </text>
+            )}
+          </box>
+        )}
+      </scrollbox>
     </box>
   );
 }
@@ -239,6 +506,21 @@ function TaskOutputView({
   const statusIndicator = getTaskStatusIndicator(task.status);
   const hasSubagents = subagentTree.length > 0 && subagentDetailLevel !== 'off';
 
+  // Parse the output to extract readable content from JSONL
+  // - Historical output (currentIteration === -1): always parse
+  // - Live output during execution (isRunning): show raw for streaming updates
+  // - Completed iterations in current session: parse to clean up final output
+  const displayOutput = useMemo(() => {
+    if (!iterationOutput) return undefined;
+    // For live output during execution, show raw for streaming updates
+    const isLiveStreaming = iterationTiming?.isRunning === true;
+    if (isLiveStreaming) {
+      return iterationOutput;
+    }
+    // For completed output (historical or from current session), parse to extract readable content
+    return parseAgentOutput(iterationOutput);
+  }, [iterationOutput, iterationTiming?.isRunning]);
+
   return (
     <box style={{ flexDirection: 'column', padding: 1, flexGrow: 1 }}>
       {/* Compact task header */}
@@ -293,9 +575,9 @@ function TaskOutputView({
         }}
       >
         <scrollbox style={{ flexGrow: 1, padding: 1 }}>
-          {iterationOutput !== undefined && iterationOutput.length > 0 ? (
-            <text fg={colors.fg.secondary}>{iterationOutput}</text>
-          ) : iterationOutput === '' ? (
+          {displayOutput !== undefined && displayOutput.length > 0 ? (
+            <text fg={colors.fg.secondary}>{displayOutput}</text>
+          ) : displayOutput === '' ? (
             <text fg={colors.fg.muted}>No output captured</text>
           ) : currentIteration === 0 ? (
             <text fg={colors.fg.muted}>Task not yet executed</text>

@@ -15,7 +15,6 @@ import { Footer } from './Footer.js';
 import { LeftPanel } from './LeftPanel.js';
 import { RightPanel } from './RightPanel.js';
 import { IterationHistoryView } from './IterationHistoryView.js';
-import { TaskDetailView } from './TaskDetailView.js';
 import { IterationDetailView } from './IterationDetailView.js';
 import { ProgressDashboard } from './ProgressDashboard.js';
 import { ConfirmationDialog } from './ConfirmationDialog.js';
@@ -36,10 +35,10 @@ import type { SubagentTraceStats, SubagentHierarchyNode } from '../../logs/types
  * View modes for the RunApp component
  * - 'tasks': Show the task list (default)
  * - 'iterations': Show the iteration history
- * - 'task-detail': Show detailed view of a single task
  * - 'iteration-detail': Show detailed view of a single iteration
+ * Note: Task details are now shown inline in the RightPanel, not as a separate view
  */
-type ViewMode = 'tasks' | 'iterations' | 'task-detail' | 'iteration-detail';
+type ViewMode = 'tasks' | 'iterations' | 'iteration-detail';
 
 /**
  * Props for the RunApp component
@@ -51,8 +50,6 @@ export interface RunAppProps {
   cwd: string;
   /** Callback when quit is requested */
   onQuit?: () => Promise<void>;
-  /** Callback when Enter is pressed on a task to drill into details */
-  onTaskDrillDown?: (task: TaskItem) => void;
   /** Callback when Enter is pressed on an iteration to drill into details */
   onIterationDrillDown?: (iteration: IterationResult) => void;
   /** Whether the interrupt confirmation dialog is showing */
@@ -208,7 +205,6 @@ export function RunApp({
   engine,
   cwd,
   onQuit,
-  onTaskDrillDown,
   onIterationDrillDown,
   showInterruptDialog = false,
   onInterruptConfirm,
@@ -255,8 +251,6 @@ export function RunApp({
   const [totalIterations] = useState(10); // Default max iterations for display
   const [viewMode, setViewMode] = useState<ViewMode>('tasks');
   const [iterationSelectedIndex, setIterationSelectedIndex] = useState(0);
-  // Task detail view state
-  const [detailTask, setDetailTask] = useState<TaskItem | null>(null);
   // Iteration detail view state
   const [detailIteration, setDetailIteration] = useState<IterationResult | null>(null);
   // Help overlay state
@@ -401,14 +395,9 @@ export function RunApp({
               t.id === event.task.id ? { ...t, status: 'active' as TaskStatus } : t
             )
           );
-          // Select the current task
-          setTasks((prev) => {
-            const idx = prev.findIndex((t) => t.id === event.task.id);
-            if (idx !== -1) {
-              setSelectedIndex(idx);
-            }
-            return prev;
-          });
+          // Select the active task (index 0 after sorting, since active tasks have highest priority)
+          // This is called separately to ensure proper state batching
+          setSelectedIndex(0);
           break;
 
         case 'iteration:completed':
@@ -536,7 +525,7 @@ export function RunApp({
 
   // Handle keyboard navigation
   const handleKeyboard = useCallback(
-    (key: { name: string }) => {
+    (key: { name: string; sequence?: string }) => {
       // When interrupt dialog is showing, only handle y/n/Esc
       if (showInterruptDialog) {
         switch (key.name) {
@@ -579,10 +568,7 @@ export function RunApp({
 
         case 'escape':
           // In detail view, Esc goes back to list view
-          if (viewMode === 'task-detail') {
-            setViewMode('tasks');
-            setDetailTask(null);
-          } else if (viewMode === 'iteration-detail') {
+          if (viewMode === 'iteration-detail') {
             setViewMode('iterations');
             setDetailIteration(null);
           } else {
@@ -597,7 +583,6 @@ export function RunApp({
           } else if (viewMode === 'iterations') {
             setIterationSelectedIndex((prev) => Math.max(0, prev - 1));
           }
-          // No navigation in task-detail view (scrollbox handles it)
           break;
 
         case 'down':
@@ -607,7 +592,6 @@ export function RunApp({
           } else if (viewMode === 'iterations') {
             setIterationSelectedIndex((prev) => Math.min(iterationHistoryLength - 1, prev + 1));
           }
-          // No navigation in task-detail view (scrollbox handles it)
           break;
 
         case 'p':
@@ -637,7 +621,7 @@ export function RunApp({
 
         case 'v':
           // Toggle between tasks and iterations view (only if not in detail view)
-          if (viewMode !== 'task-detail' && viewMode !== 'iteration-detail') {
+          if (viewMode !== 'iteration-detail') {
             setViewMode((prev) => (prev === 'tasks' ? 'iterations' : 'tasks'));
           }
           break;
@@ -702,45 +686,41 @@ export function RunApp({
           break;
 
         case 't':
-          // Cycle through subagent detail levels: off → minimal → moderate → full → off
-          setSubagentDetailLevel((prev) => {
-            const levels: SubagentDetailLevel[] = ['off', 'minimal', 'moderate', 'full'];
-            const currentIdx = levels.indexOf(prev);
-            const nextIdx = (currentIdx + 1) % levels.length;
-            const nextLevel = levels[nextIdx]!;
-            // Persist the change if onSaveSettings is available
-            if (storedConfig && onSaveSettings) {
-              const newConfig = { ...storedConfig, subagentTracingDetail: nextLevel };
-              onSaveSettings(newConfig).catch(() => {
-                // Ignore save errors for quick toggle - setting is still in-memory
-              });
-            }
-            return nextLevel;
-          });
-          break;
-
-        case 'T':
-          // Toggle subagent tree panel visibility (Shift+T)
-          // The panel shows on the right side; subagent tracking continues even when hidden
-          setSubagentPanelVisible((prev) => {
-            const newVisible = !prev;
-            // Persist the change to session state
-            onSubagentPanelVisibilityChange?.(newVisible);
-            return newVisible;
-          });
+          // Check if Shift+T (uppercase) - toggle subagent tree panel
+          // key.sequence contains the actual character ('T' for Shift+T, 't' for plain t)
+          if (key.sequence === 'T') {
+            // Toggle subagent tree panel visibility (Shift+T)
+            // The panel shows on the right side; subagent tracking continues even when hidden
+            setSubagentPanelVisible((prev) => {
+              const newVisible = !prev;
+              // Persist the change to session state
+              onSubagentPanelVisibilityChange?.(newVisible);
+              return newVisible;
+            });
+          } else {
+            // Cycle through subagent detail levels: off → minimal → moderate → full → off
+            setSubagentDetailLevel((prev) => {
+              const levels: SubagentDetailLevel[] = ['off', 'minimal', 'moderate', 'full'];
+              const currentIdx = levels.indexOf(prev);
+              const nextIdx = (currentIdx + 1) % levels.length;
+              const nextLevel = levels[nextIdx]!;
+              // Persist the change if onSaveSettings is available
+              if (storedConfig && onSaveSettings) {
+                const newConfig = { ...storedConfig, subagentTracingDetail: nextLevel };
+                onSaveSettings(newConfig).catch(() => {
+                  // Ignore save errors for quick toggle - setting is still in-memory
+                });
+              }
+              return nextLevel;
+            });
+          }
           break;
 
         case 'return':
         case 'enter':
-          // Enter drills into details (does NOT start execution - use 's' for that)
-          if (viewMode === 'tasks') {
-            // Drill into selected task details (use displayedTasks for filtered list)
-            if (displayedTasks[selectedIndex]) {
-              setDetailTask(displayedTasks[selectedIndex]);
-              setViewMode('task-detail');
-              onTaskDrillDown?.(displayedTasks[selectedIndex]);
-            }
-          } else if (viewMode === 'iterations') {
+          // Enter drills into iteration details (does NOT start execution - use 's' for that)
+          // Note: Task details are shown inline in RightPanel, no separate drill-down needed
+          if (viewMode === 'iterations') {
             // Drill into selected iteration details
             if (iterations[iterationSelectedIndex]) {
               setDetailIteration(iterations[iterationSelectedIndex]);
@@ -748,11 +728,10 @@ export function RunApp({
               onIterationDrillDown?.(iterations[iterationSelectedIndex]);
             }
           }
-          // In detail views, Enter does nothing
           break;
       }
     },
-    [displayedTasks, selectedIndex, status, engine, onQuit, onTaskDrillDown, viewMode, iterations, iterationSelectedIndex, iterationHistoryLength, onIterationDrillDown, showInterruptDialog, onInterruptConfirm, onInterruptCancel, showHelp, showSettings, showEpicLoader, onStart, storedConfig, onSaveSettings, onLoadEpics, subagentDetailLevel, onSubagentPanelVisibilityChange]
+    [displayedTasks, selectedIndex, status, engine, onQuit, viewMode, iterations, iterationSelectedIndex, iterationHistoryLength, onIterationDrillDown, showInterruptDialog, onInterruptConfirm, onInterruptCancel, showHelp, showSettings, showEpicLoader, onStart, storedConfig, onSaveSettings, onLoadEpics, subagentDetailLevel, onSubagentPanelVisibilityChange]
   );
 
   useKeyboard(handleKeyboard);
@@ -780,14 +759,25 @@ export function RunApp({
   // - If selected task has a completed iteration: show that iteration's output with timing
   // - Otherwise: undefined (will show "waiting" or appropriate message)
   const selectedTaskIteration = useMemo(() => {
-    if (!selectedTask)
+    // If no selected task, check if there's currently executing task and show that
+    if (!selectedTask) {
+      // If there's a current task executing, show its output even if no task selected
+      if (currentTaskId) {
+        const timing: IterationTimingInfo = {
+          isRunning: true,
+        };
+        return { iteration: currentIteration, output: currentOutput, timing };
+      }
       return { iteration: currentIteration, output: undefined, timing: undefined };
+    }
 
     // Check if this task is currently being executed
-    if (currentTaskId === selectedTask.id) {
+    // Use both ID match AND status check for robustness against state timing issues
+    const isExecuting = currentTaskId === selectedTask.id || selectedTask.status === 'active';
+    if (isExecuting && currentTaskId) {
       // Find the iteration:started event timestamp for this task
       const runningIteration = iterations.find(
-        (iter) => iter.task.id === selectedTask.id && iter.status === 'running'
+        (iter) => iter.task.id === currentTaskId && iter.status === 'running'
       );
       const timing: IterationTimingInfo = {
         startedAt: runningIteration?.startedAt,
@@ -986,16 +976,7 @@ export function RunApp({
           height: contentHeight,
         }}
       >
-        {viewMode === 'task-detail' && detailTask ? (
-          // Full-screen task detail view
-          <TaskDetailView
-            task={detailTask}
-            onBack={() => {
-              setViewMode('tasks');
-              setDetailTask(null);
-            }}
-          />
-        ) : viewMode === 'iteration-detail' && detailIteration ? (
+        {viewMode === 'iteration-detail' && detailIteration ? (
           // Full-screen iteration detail view
           <IterationDetailView
             iteration={detailIteration}
