@@ -24,7 +24,15 @@
       "Bash(bun run typecheck:*)",
       "Bash(./dist/cli.js:*)",
       "Bash(bun:*)",
-      "Bash(bd doctor:*)"
+      "Bash(bd doctor:*)",
+      "Bash(timeout 15 ./dist/cli.js:*)",
+      "Bash(echo:*)",
+      "Bash(pgrep:*)",
+      "Bash(pkill:*)",
+      "Bash(timeout 10 ./dist/cli.js:*)",
+      "Bash(bd dep add:*)",
+      "Bash(bd update:*)",
+      "WebFetch(domain:docs.anthropic.com)"
     ]
   }
 }

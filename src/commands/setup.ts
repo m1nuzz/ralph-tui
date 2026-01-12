@@ -1,6 +1,6 @@
 /**
  * ABOUTME: Setup command for Ralph TUI.
- * Runs the interactive setup wizard to create .ralph-tui.yaml config.
+ * Runs the interactive setup wizard to create .ralph-tui/config.toml.
  */
 
 import { runSetupWizard, printError } from '../setup/index.js';
@@ -57,7 +57,7 @@ Description:
   3. Select an AI agent CLI (claude, opencode, etc.)
   4. Set iteration limits and auto-commit preferences
 
-  The configuration is saved to .ralph-tui.yaml in your project root.
+  The configuration is saved to .ralph-tui/config.toml in your project root.
 
 Examples:
   ralph-tui setup              # Run interactive setup

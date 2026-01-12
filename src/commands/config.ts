@@ -37,7 +37,7 @@ function formatSourceInfo(source: ConfigSource): string {
   if (source.projectPath) {
     lines.push(`│   ✓ ${source.projectPath}`);
   } else {
-    lines.push(`│   ○ .ralph-tui.yaml (not found in project tree)`);
+    lines.push(`│   ○ .ralph-tui/config.toml (not found in project tree)`);
   }
 
   lines.push('└' + '─'.repeat(55));
@@ -58,16 +58,16 @@ function formatMergedConfig(config: StoredConfig): string {
     lines.push('│ (no configuration set - using defaults)');
     lines.push('│');
     lines.push('│ Defaults:');
-    lines.push('│   defaultAgent: claude');
-    lines.push('│   defaultTracker: beads-bv');
-    lines.push('│   maxIterations: 10');
-    lines.push('│   iterationDelay: 1000');
-    lines.push('│   outputDir: .ralph-output');
+    lines.push('│   defaultAgent = "claude"');
+    lines.push('│   defaultTracker = "beads-bv"');
+    lines.push('│   maxIterations = 10');
+    lines.push('│   iterationDelay = 1000');
+    lines.push('│   outputDir = ".ralph-output"');
   } else {
-    // Serialize to YAML and add pipe prefix for box alignment
-    const yaml = serializeConfig(config);
-    const yamlLines = yaml.split('\n');
-    for (const line of yamlLines) {
+    // Serialize to TOML and add pipe prefix for box alignment
+    const toml = serializeConfig(config);
+    const tomlLines = toml.split('\n');
+    for (const line of tomlLines) {
       if (line.trim()) {
         lines.push(`│ ${line}`);
       }
@@ -86,7 +86,7 @@ function formatMergedConfig(config: StoredConfig): string {
 export async function executeConfigShowCommand(args: string[]): Promise<void> {
   // Parse options
   const showSources = args.includes('--sources') || args.includes('-s');
-  const showYaml = args.includes('--yaml') || args.includes('-y');
+  const showToml = args.includes('--toml') || args.includes('-t');
   const cwdIndex = args.indexOf('--cwd');
   const cwd = cwdIndex !== -1 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process.cwd();
 
@@ -98,21 +98,21 @@ export async function executeConfigShowCommand(args: string[]): Promise<void> {
   console.log('═'.repeat(56));
 
   // Source information
-  if (showSources || !showYaml) {
+  if (showSources || !showToml) {
     console.log(formatSourceInfo(source));
   }
 
   // Merged config
-  if (showYaml) {
-    // Raw YAML output (machine-readable)
+  if (showToml) {
+    // Raw TOML output (machine-readable)
     console.log(serializeConfig(config));
   } else {
     console.log(formatMergedConfig(config));
   }
 
   // Help text
-  if (!showYaml) {
-    console.log('\nHint: Use --yaml for raw YAML output');
+  if (!showToml) {
+    console.log('\nHint: Use --toml for raw TOML output');
     console.log(`      Use --sources to see config file locations`);
   }
 }
@@ -132,39 +132,36 @@ Commands:
 
 Show Options:
   --sources, -s     Show configuration source files
-  --yaml, -y        Output raw YAML (machine-readable)
+  --toml, -t        Output raw TOML (machine-readable)
   --cwd <path>      Use specified directory for project config lookup
 
 Configuration Files:
   Global:   ${CONFIG_PATHS.global}
-  Project:  .ralph-tui.yaml (in project root or any parent directory)
+  Project:  .ralph-tui/config.toml (in project root or any parent directory)
 
 Project config overrides global config. CLI flags override both.
 
-Example config.yaml:
-  defaultAgent: claude
-  defaultTracker: beads-bv
-  maxIterations: 20
-  iterationDelay: 2000
-  autoCommit: true
+Example config.toml:
+  defaultAgent = "claude"
+  defaultTracker = "beads-bv"
+  maxIterations = 20
+  iterationDelay = 2000
+  autoCommit = true
 
-  agents:
-    - name: claude
-      plugin: claude
-      default: true
-      options:
-        model: opus
+  [[agents]]
+  name = "claude"
+  plugin = "claude"
+  default = true
+  options = { model = "opus" }
 
-  trackers:
-    - name: beads
-      plugin: beads-bv
-      default: true
-      options:
-        epicId: my-epic
+  [[trackers]]
+  name = "beads"
+  plugin = "beads-bv"
+  default = true
 
-  errorHandling:
-    strategy: skip
-    maxRetries: 3
+  [errorHandling]
+  strategy = "skip"
+  maxRetries = 3
 `);
 }
 

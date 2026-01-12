@@ -209,7 +209,7 @@ async function handleInitTemplate(args: string[]): Promise<void> {
   console.log(`${DIM}Template type: ${trackerType}${RESET}`);
   console.log(`\n${BOLD}Next steps:${RESET}`);
   console.log(`  1. Edit ${path.basename(outputPath)} to customize the prompt`);
-  console.log(`  2. Add to your ${CYAN}.ralph-tui.yaml${RESET}:`);
+  console.log(`  2. Add to your ${CYAN}.ralph-tui/config.toml${RESET}:`);
   console.log(`     ${DIM}prompt_template: ${path.relative(cwd, outputPath)}${RESET}`);
   console.log(`\n${DIM}See 'ralph-tui template show' for available variables${RESET}`);
 }

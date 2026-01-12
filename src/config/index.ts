@@ -1,13 +1,13 @@
 /**
  * ABOUTME: Configuration loading and validation for Ralph TUI.
  * Handles loading global and project configs, merging them, and validating the result.
- * Supports: ~/.config/ralph-tui/config.yaml (global) and .ralph-tui.yaml (project).
+ * Supports: ~/.config/ralph-tui/config.toml (global) and .ralph-tui/config.toml (project).
  */
 
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { readFile, access, constants } from 'node:fs/promises';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { readFile, access, constants, mkdir } from 'node:fs/promises';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import type {
   StoredConfig,
   RalphConfig,
@@ -27,14 +27,19 @@ import {
 } from './schema.js';
 
 /**
- * Global config file path (~/.config/ralph-tui/config.yaml)
+ * Global config file path (~/.config/ralph-tui/config.toml)
  */
-const GLOBAL_CONFIG_PATH = join(homedir(), '.config', 'ralph-tui', 'config.yaml');
+const GLOBAL_CONFIG_PATH = join(homedir(), '.config', 'ralph-tui', 'config.toml');
 
 /**
- * Project config file name (.ralph-tui.yaml in project root)
+ * Project config directory name (.ralph-tui in project root)
  */
-const PROJECT_CONFIG_FILENAME = '.ralph-tui.yaml';
+const PROJECT_CONFIG_DIR = '.ralph-tui';
+
+/**
+ * Project config file name (config.toml inside .ralph-tui directory)
+ */
+const PROJECT_CONFIG_FILENAME = 'config.toml';
 
 /**
  * Config source information for debugging
@@ -60,7 +65,7 @@ interface LoadConfigResult {
 }
 
 /**
- * Load and validate a single YAML config file.
+ * Load and validate a single TOML config file.
  * @param configPath Path to the config file
  * @returns Parsed and validated config, or empty object if file doesn't exist
  */
@@ -68,12 +73,13 @@ async function loadConfigFile(configPath: string): Promise<LoadConfigResult> {
   try {
     await access(configPath, constants.R_OK);
     const content = await readFile(configPath, 'utf-8');
-    const parsed = parseYaml(content);
 
     // Handle empty file
-    if (parsed === null || parsed === undefined) {
+    if (!content.trim()) {
       return { config: {}, exists: true };
     }
+
+    const parsed = parseToml(content);
 
     // Validate with Zod
     const result: ConfigParseResult = validateStoredConfig(parsed);
@@ -91,6 +97,7 @@ async function loadConfigFile(configPath: string): Promise<LoadConfigResult> {
 
 /**
  * Find the project config file by searching up from cwd.
+ * Looks for .ralph-tui/config.toml in each directory up to root.
  * @param startDir Directory to start searching from
  * @returns Path to project config if found, null otherwise
  */
@@ -99,7 +106,7 @@ async function findProjectConfigPath(startDir: string): Promise<string | null> {
   const root = dirname(dir);
 
   while (dir !== root) {
-    const configPath = join(dir, PROJECT_CONFIG_FILENAME);
+    const configPath = join(dir, PROJECT_CONFIG_DIR, PROJECT_CONFIG_FILENAME);
     try {
       await access(configPath, constants.R_OK);
       return configPath;
@@ -110,7 +117,7 @@ async function findProjectConfigPath(startDir: string): Promise<string | null> {
   }
 
   // Check root as well
-  const rootConfig = join(root, PROJECT_CONFIG_FILENAME);
+  const rootConfig = join(root, PROJECT_CONFIG_DIR, PROJECT_CONFIG_FILENAME);
   try {
     await access(rootConfig, constants.R_OK);
     return rootConfig;
@@ -160,7 +167,7 @@ function mergeConfigs(global: StoredConfig, project: StoredConfig): StoredConfig
 
 /**
  * Load stored configuration from global and project YAML files.
- * Project config (.ralph-tui.yaml) overrides global config (~/.config/ralph-tui/config.yaml).
+ * Project config (.ralph-tui/config.toml) overrides global config (~/.config/ralph-tui/config.toml).
  * @param cwd Working directory for finding project config
  * @param globalConfigPath Override global config path (for testing)
  * @returns Merged configuration
@@ -232,15 +239,12 @@ export async function loadStoredConfigWithSource(
 }
 
 /**
- * Serialize configuration to YAML string.
+ * Serialize configuration to TOML string.
  * @param config Configuration to serialize
- * @returns YAML string
+ * @returns TOML string
  */
 export function serializeConfig(config: StoredConfig): string {
-  return stringifyYaml(config, {
-    indent: 2,
-    lineWidth: 100,
-  });
+  return stringifyToml(config);
 }
 
 /**
@@ -355,7 +359,7 @@ function getDefaultTrackerConfig(
 
 /**
  * Build runtime configuration by merging stored config with CLI options.
- * Loads both global (~/.config/ralph-tui/config.yaml) and project (.ralph-tui.yaml) configs.
+ * Loads both global (~/.config/ralph-tui/config.toml) and project (.ralph-tui/config.toml) configs.
  */
 export async function buildConfig(
   options: RuntimeOptions = {}
@@ -497,8 +501,8 @@ export type {
 } from './schema.js';
 
 /**
- * Save configuration to the project config file (.ralph-tui.yaml).
- * Creates the file if it doesn't exist, updates it if it does.
+ * Save configuration to the project config file (.ralph-tui/config.toml).
+ * Creates the directory and file if they don't exist, updates if they do.
  * @param config Configuration to save
  * @param cwd Working directory (config will be saved in this directory)
  */
@@ -507,9 +511,14 @@ export async function saveProjectConfig(
   cwd: string = process.cwd()
 ): Promise<void> {
   const { writeFile } = await import('node:fs/promises');
-  const projectPath = join(cwd, PROJECT_CONFIG_FILENAME);
-  const yaml = serializeConfig(config);
-  await writeFile(projectPath, yaml, 'utf-8');
+  const configDir = join(cwd, PROJECT_CONFIG_DIR);
+  const projectPath = join(configDir, PROJECT_CONFIG_FILENAME);
+
+  // Ensure the .ralph-tui directory exists
+  await mkdir(configDir, { recursive: true });
+
+  const toml = serializeConfig(config);
+  await writeFile(projectPath, toml, 'utf-8');
 }
 
 /**
@@ -518,11 +527,21 @@ export async function saveProjectConfig(
  * @returns Path to the project config file
  */
 export function getProjectConfigPath(cwd: string = process.cwd()): string {
-  return join(cwd, PROJECT_CONFIG_FILENAME);
+  return join(cwd, PROJECT_CONFIG_DIR, PROJECT_CONFIG_FILENAME);
+}
+
+/**
+ * Get the project config directory path for a given working directory.
+ * @param cwd Working directory
+ * @returns Path to the project config directory
+ */
+export function getProjectConfigDir(cwd: string = process.cwd()): string {
+  return join(cwd, PROJECT_CONFIG_DIR);
 }
 
 // Constants for external use
 export const CONFIG_PATHS = {
   global: GLOBAL_CONFIG_PATH,
+  projectDir: PROJECT_CONFIG_DIR,
   projectFilename: PROJECT_CONFIG_FILENAME,
 } as const;

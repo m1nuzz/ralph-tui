@@ -55,7 +55,7 @@ export const TrackerPluginConfigSchema = z.object({
 
 /**
  * Stored configuration schema (global or project config file)
- * Both global (~/.config/ralph-tui/config.yaml) and project (.ralph-tui.yaml)
+ * Both global (~/.config/ralph-tui/config.toml) and project (.ralph-tui/config.toml)
  * use this schema.
  */
 export const StoredConfigSchema = z

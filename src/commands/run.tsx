@@ -974,7 +974,7 @@ export async function executeRunCommand(args: string[]): Promise<void> {
   if (!configExists && !options.noSetup) {
     // No config found - offer to run setup
     console.log('');
-    console.log('No .ralph-tui.yaml configuration found in this project.');
+    console.log('No .ralph-tui/config.toml configuration found in this project.');
     console.log('');
 
     // Run the setup wizard
@@ -995,7 +995,7 @@ export async function executeRunCommand(args: string[]): Promise<void> {
     console.log('Setup complete! Starting Ralph...');
     console.log('');
   } else if (!configExists && options.noSetup) {
-    console.log('No .ralph-tui.yaml found. Using default configuration.');
+    console.log('No .ralph-tui/config.toml found. Using default configuration.');
   }
 
   console.log('Initializing Ralph TUI...');

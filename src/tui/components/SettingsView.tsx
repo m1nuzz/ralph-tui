@@ -1,7 +1,7 @@
 /**
  * ABOUTME: Settings view component for configuring Ralph TUI.
  * Displays current configuration values and allows modification.
- * Changes are persisted to .ralph-tui.yaml in the project directory.
+ * Changes are persisted to .ralph-tui/config.toml in the project directory.
  */
 
 import type { ReactNode } from 'react';
