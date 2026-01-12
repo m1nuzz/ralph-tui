@@ -13,9 +13,10 @@ Create detailed Product Requirements Documents optimized for AI agent execution 
 
 1. Receive a feature description from the user
 2. Ask 3-5 essential clarifying questions (with lettered options) - one set at a time
-3. After each answer, ask follow-up questions if needed (adaptive exploration)
-4. Generate a structured PRD when you have enough context
-5. Output the PRD wrapped in `[PRD]...[/PRD]` markers for TUI parsing
+3. **Always ask about quality gates** (what commands must pass)
+4. After each answer, ask follow-up questions if needed (adaptive exploration)
+5. Generate a structured PRD when you have enough context
+6. Output the PRD wrapped in `[PRD]...[/PRD]` markers for TUI parsing
 
 **Important:** Do NOT start implementing. Just create the PRD.
 
@@ -30,6 +31,7 @@ Ask questions one set at a time. Each answer should inform your next questions. 
 - **Scope/Boundaries:** What should it NOT do?
 - **Success Criteria:** How do we know it's done?
 - **Integration:** How does it fit with existing features?
+- **Quality Gates:** What commands must pass for each story? (REQUIRED)
 
 ### Format Questions Like This:
 
@@ -48,6 +50,22 @@ Ask questions one set at a time. Each answer should inform your next questions. 
 ```
 
 This lets users respond with "1A, 2C" for quick iteration.
+
+### Quality Gates Question (REQUIRED)
+
+Always ask about quality gates - these are project-specific:
+
+```
+What quality commands must pass for each user story?
+   A. pnpm typecheck && pnpm lint
+   B. npm run typecheck && npm run lint
+   C. bun run typecheck && bun run lint
+   D. Other: [specify your commands]
+
+For UI stories, should we include browser verification?
+   A. Yes, use dev-browser skill to verify visually
+   B. No, automated tests are sufficient
+```
 
 ### Adaptive Questioning
 
@@ -70,7 +88,23 @@ Brief description of the feature and the problem it solves.
 ### 2. Goals
 Specific, measurable objectives (bullet list).
 
-### 3. User Stories
+### 3. Quality Gates
+**CRITICAL:** List the commands that must pass for every user story.
+
+```markdown
+## Quality Gates
+
+These commands must pass for every user story:
+- `pnpm typecheck` - Type checking
+- `pnpm lint` - Linting
+
+For UI stories, also include:
+- Verify in browser using dev-browser skill
+```
+
+This section is extracted by conversion tools (ralph-tui-create-json, ralph-tui-create-beads) and appended to each story's acceptance criteria.
+
+### 4. User Stories
 Each story needs:
 - **Title:** Short descriptive name
 - **Description:** "As a [user], I want [feature] so that [benefit]"
@@ -86,9 +120,9 @@ Each story should be small enough to implement in one focused AI agent session.
 **Acceptance Criteria:**
 - [ ] Specific verifiable criterion
 - [ ] Another criterion
-- [ ] Tests pass (npm run test)
-- [ ] Type checking passes (npm run typecheck)
 ```
+
+**Note:** Do NOT include quality gate commands in individual story criteria - they are defined once in the Quality Gates section and applied automatically during conversion.
 
 **Important:**
 - Acceptance criteria must be verifiable, not vague
@@ -96,25 +130,25 @@ Each story should be small enough to implement in one focused AI agent session.
 - "Button shows confirmation dialog before deleting" is good
 - Each story should be independently completable
 
-### 4. Functional Requirements
+### 5. Functional Requirements
 Numbered list of specific functionalities:
 - "FR-1: The system must allow users to..."
 - "FR-2: When a user clicks X, the system must..."
 
 Be explicit and unambiguous.
 
-### 5. Non-Goals (Out of Scope)
+### 6. Non-Goals (Out of Scope)
 What this feature will NOT include. Critical for managing scope.
 
-### 6. Technical Considerations (Optional)
+### 7. Technical Considerations (Optional)
 - Known constraints or dependencies
 - Integration points with existing systems
 - Performance requirements
 
-### 7. Success Metrics
+### 8. Success Metrics
 How will success be measured?
 
-### 8. Open Questions
+### 9. Open Questions
 Remaining questions or areas needing clarification.
 
 ---
@@ -140,6 +174,9 @@ The PRD will be executed by AI coding agents via ralph-tui. Therefore:
 # PRD: Feature Name
 
 ## Overview
+...
+
+## Quality Gates
 ...
 
 ## User Stories
@@ -178,13 +215,17 @@ The PRD will be executed by AI coding agents via ralph-tui. Therefore:
    C. Main view + settings
    D. Other
 
-4. Any specific color scheme preferences?
-   A. High contrast (pure black/white)
-   B. Soft contrast (dark gray tones)
-   C. Match VS Code dark theme
-   D. Let me decide later
+4. What quality commands must pass for each story?
+   A. pnpm typecheck && pnpm lint
+   B. npm run typecheck && npm run lint
+   C. bun run typecheck
+   D. Other: [specify]
 
-**User:** 3A, 4B
+5. For UI stories, include browser verification?
+   A. Yes, use dev-browser skill
+   B. No, automated tests sufficient
+
+**User:** 3A, 4A, 5A
 
 **Assistant:** Perfect, I have enough to generate the PRD.
 
@@ -199,6 +240,15 @@ Add dark mode support to ralph-tui to reduce eye strain during long orchestratio
 - Persist theme preference across sessions
 - Apply consistent styling to all TUI components
 
+## Quality Gates
+
+These commands must pass for every user story:
+- `pnpm typecheck` - Type checking
+- `pnpm lint` - Linting
+
+For UI stories, also include:
+- Verify in browser using dev-browser skill
+
 ## User Stories
 
 ### US-001: Add theme configuration
@@ -208,7 +258,6 @@ Add dark mode support to ralph-tui to reduce eye strain during long orchestratio
 - [ ] Add `theme` field to `.ralph-tui.yaml` schema
 - [ ] Support values: "light", "dark", "system"
 - [ ] Default to "light" for backwards compatibility
-- [ ] npm run typecheck passes
 
 ### US-002: Create dark theme color palette
 **Description:** As a user, I want a soft-contrast dark theme that's easy on the eyes.
@@ -217,7 +266,6 @@ Add dark mode support to ralph-tui to reduce eye strain during long orchestratio
 - [ ] Define dark palette with gray tones (not pure black)
 - [ ] Ensure sufficient contrast ratios (WCAG AA)
 - [ ] Colors work well for all UI states (selected, hover, disabled)
-- [ ] npm run typecheck passes
 
 ### US-003: Apply theme to TUI components
 **Description:** As a user, I want all TUI components to respect my theme preference.
@@ -228,7 +276,6 @@ Add dark mode support to ralph-tui to reduce eye strain during long orchestratio
 - [ ] Detail panels use theme colors
 - [ ] Progress bar uses theme colors
 - [ ] Dialogs use theme colors
-- [ ] npm run typecheck passes
 
 ### US-004: Add theme toggle in settings
 **Description:** As a user, I want to toggle themes from within the TUI settings.
@@ -237,7 +284,6 @@ Add dark mode support to ralph-tui to reduce eye strain during long orchestratio
 - [ ] Theme option visible in settings view
 - [ ] Changes apply immediately without restart
 - [ ] Changes persist to config file
-- [ ] npm run typecheck passes
 
 ## Functional Requirements
 - FR-1: Theme setting must be readable from `.ralph-tui.yaml`
@@ -271,8 +317,11 @@ Add dark mode support to ralph-tui to reduce eye strain during long orchestratio
 Before outputting the PRD:
 
 - [ ] Asked clarifying questions with lettered options
+- [ ] Asked about quality gates (REQUIRED)
 - [ ] Asked follow-up questions when needed
+- [ ] Quality Gates section included with project-specific commands
 - [ ] User stories are small and independently completable
+- [ ] User stories do NOT include quality gate commands (they're in the Quality Gates section)
 - [ ] Functional requirements are numbered and unambiguous
 - [ ] Non-goals section defines clear boundaries
 - [ ] PRD is wrapped in `[PRD]...[/PRD]` markers

@@ -14,10 +14,34 @@ Converts PRDs to beads (epic + child tasks) for ralph-tui autonomous execution.
 ## The Job
 
 Take a PRD (markdown file or text) and create beads in `.beads/beads.jsonl`:
-1. Create an **epic** bead for the feature
-2. Create **child beads** for each user story
-3. Set up **dependencies** between beads (schema → backend → UI)
-4. Output ready for `ralph-tui run --tracker beads`
+1. **Extract Quality Gates** from the PRD's "Quality Gates" section
+2. Create an **epic** bead for the feature
+3. Create **child beads** for each user story (with quality gates appended)
+4. Set up **dependencies** between beads (schema → backend → UI)
+5. Output ready for `ralph-tui run --tracker beads`
+
+---
+
+## Step 1: Extract Quality Gates
+
+Look for the "Quality Gates" section in the PRD:
+
+```markdown
+## Quality Gates
+
+These commands must pass for every user story:
+- `pnpm typecheck` - Type checking
+- `pnpm lint` - Linting
+
+For UI stories, also include:
+- Verify in browser using dev-browser skill
+```
+
+Extract:
+- **Universal gates:** Commands that apply to ALL stories (e.g., `pnpm typecheck`)
+- **UI gates:** Commands that apply only to UI stories (e.g., browser verification)
+
+**If no Quality Gates section exists:** Ask the user what commands should pass, or use a sensible default like `npm run typecheck`.
 
 ---
 
@@ -32,11 +56,11 @@ bd create --type=epic \
   --description="[Feature description from PRD]" \
   --labels="ralph,feature"
 
-# Create child bead
+# Create child bead (with quality gates in acceptance criteria)
 bd create \
   --parent=EPIC_ID \
   --title="[Story Title]" \
-  --description="[Story description with acceptance criteria]" \
+  --description="[Story description with acceptance criteria INCLUDING quality gates]" \
   --priority=[1-4] \
   --labels="ralph,task"
 ```
@@ -108,20 +132,18 @@ ralph-tui will:
 3. UI components (depends on backend)
 4. Integration/polish (depends on UI)
 
-**Automatic dependency detection:** If story N mentions story M (where M < N) as a prerequisite, create the dependency.
-
 ---
 
-## Acceptance Criteria: Must Be Verifiable
+## Acceptance Criteria: Quality Gates + Story-Specific
 
-Each criterion must be something the agent can CHECK, not something vague.
+Each bead's description should include acceptance criteria with:
+1. **Story-specific criteria** from the PRD (what this story accomplishes)
+2. **Quality gates** from the PRD's Quality Gates section (appended at the end)
 
 ### Good criteria (verifiable):
 - "Add `investorType` column to investor table with default 'cold'"
 - "Filter dropdown has options: All, Cold, Friend"
 - "Clicking toggle shows confirmation dialog"
-- "bun run typecheck passes"
-- "bun run lint passes"
 
 ### Bad criteria (vague):
 - ❌ "Works correctly"
@@ -129,34 +151,19 @@ Each criterion must be something the agent can CHECK, not something vague.
 - ❌ "Good UX"
 - ❌ "Handles edge cases"
 
-### Always include as final criteria:
-```
-bun run typecheck passes
-```
-
-For stories with testable logic, also include:
-```
-bun run test passes
-```
-
-### For stories that change UI, also include:
-```
-Verify in browser using dev-browser skill
-```
-
-Frontend stories are NOT complete until visually verified. The agent will use the dev-browser skill to navigate to the page, interact with the UI, and confirm changes work.
-
 ---
 
 ## Conversion Rules
 
-1. **Each user story → one bead**
-2. **First story**: No dependencies (creates foundation)
-3. **Subsequent stories**: Depend on their predecessors (UI depends on backend, etc.)
-4. **Priority**: Based on dependency order, then document order (0=critical, 2=medium, 4=backlog)
-5. **Labels**: Epic gets `ralph,feature`; Tasks get `ralph,task`
-6. **All stories**: `status: "open"`
-7. **branchName**: Not needed for beads (ralph-tui manages branches)
+1. **Extract Quality Gates** from PRD first
+2. **Each user story → one bead**
+3. **First story**: No dependencies (creates foundation)
+4. **Subsequent stories**: Depend on their predecessors (UI depends on backend, etc.)
+5. **Priority**: Based on dependency order, then document order (0=critical, 2=medium, 4=backlog)
+6. **Labels**: Epic gets `ralph,feature`; Tasks get `ralph,task`
+7. **All stories**: `status: "open"`
+8. **Acceptance criteria**: Story criteria + quality gates appended
+9. **UI stories**: Also append UI-specific gates (browser verification)
 
 ---
 
@@ -185,15 +192,42 @@ Each is one focused change that can be completed and verified independently.
 
 **Input PRD:**
 ```markdown
-# Friends Outreach
+# PRD: Friends Outreach
 
 Add ability to mark investors as "friends" for warm outreach.
 
-## Requirements
-- Toggle between cold/friend on investor list
-- Friends get shorter follow-up sequence (3 instead of 5)
-- Different message template asking for deck feedback
-- Filter list by type
+## Quality Gates
+
+These commands must pass for every user story:
+- `pnpm typecheck` - Type checking
+- `pnpm lint` - Linting
+
+For UI stories, also include:
+- Verify in browser using dev-browser skill
+
+## User Stories
+
+### US-001: Add investorType field to investor table
+**Description:** As a developer, I need to categorize investors as 'cold' or 'friend'.
+
+**Acceptance Criteria:**
+- [ ] Add investorType column: 'cold' | 'friend' (default 'cold')
+- [ ] Generate and run migration successfully
+
+### US-002: Add type toggle to investor list rows
+**Description:** As Ryan, I want to toggle investor type directly from the list.
+
+**Acceptance Criteria:**
+- [ ] Each row has Cold | Friend toggle
+- [ ] Switching shows confirmation dialog
+- [ ] On confirm: updates type in database
+
+### US-003: Filter investors by type
+**Description:** As Ryan, I want to filter the list to see just friends or cold.
+
+**Acceptance Criteria:**
+- [ ] Filter dropdown: All | Cold | Friend
+- [ ] Filter persists in URL params
 ```
 
 **Output beads:**
@@ -212,45 +246,46 @@ bd create --parent=ralph-tui-abc \
 ## Acceptance Criteria
 - [ ] Add investorType column: 'cold' | 'friend' (default 'cold')
 - [ ] Generate and run migration successfully
-- [ ] bun run typecheck passes" \
+- [ ] pnpm typecheck passes
+- [ ] pnpm lint passes" \
   --priority=1 \
   --labels="ralph,task"
 
-# US-002: Deps on US-001 (needs backend first)
+# US-002: UI story (gets browser verification too)
 bd create --parent=ralph-tui-abc \
   --title="US-002: Add type toggle to investor list rows" \
   --description="As Ryan, I want to toggle investor type directly from the list.
 
 ## Acceptance Criteria
 - [ ] Each row has Cold | Friend toggle
-- [ ] Switching shows confirmation: 'Delete tasks and regenerate?'
-- [ ] On confirm: updates type, deletes tasks, regenerates
-- [ ] bun run typecheck passes
+- [ ] Switching shows confirmation dialog
+- [ ] On confirm: updates type in database
+- [ ] pnpm typecheck passes
+- [ ] pnpm lint passes
 - [ ] Verify in browser using dev-browser skill" \
   --priority=2 \
   --labels="ralph,task"
 
-# After creating, add dependency
+# Add dependency: US-002 depends on US-001
 bd dep add ralph-tui-002 ralph-tui-001
 
-# US-003: Deps on US-002 (needs UI first)
+# US-003: UI story
 bd create --parent=ralph-tui-abc \
-  --title="US-003: Create friend-specific phase progression" \
-  --description="As a developer, friends should use 3 follow-ups instead of 5.
+  --title="US-003: Filter investors by type" \
+  --description="As Ryan, I want to filter the list to see just friends or cold.
 
 ## Acceptance Criteria
-- [ ] Friends: initial → followup_1 → followup_2 → followup_3 → final
-- [ ] Cold: keeps all 5 follow-ups
-- [ ] getNextPhase respects investorType
-- [ ] bun run typecheck passes" \
+- [ ] Filter dropdown: All | Cold | Friend
+- [ ] Filter persists in URL params
+- [ ] pnpm typecheck passes
+- [ ] pnpm lint passes
+- [ ] Verify in browser using dev-browser skill" \
   --priority=3 \
   --labels="ralph,task"
 
-# Add dependency
+# Add dependency: US-003 depends on US-002
 bd dep add ralph-tui-003 ralph-tui-002
 ```
-
-Each bead's description should include the full acceptance criteria from the PRD.
 
 ---
 
@@ -277,10 +312,11 @@ ralph-tui will:
 
 ## Checklist Before Creating Beads
 
+- [ ] Extracted Quality Gates from PRD (or asked user if missing)
 - [ ] Each story is completable in one iteration (small enough)
 - [ ] Stories are ordered by dependency (schema → backend → UI)
-- [ ] Every story has "bun run typecheck passes" as criterion
-- [ ] UI stories have "Verify in browser using dev-browser skill" as criterion
+- [ ] Quality gates appended to every bead's acceptance criteria
+- [ ] UI stories have browser verification (if specified in Quality Gates)
 - [ ] Acceptance criteria are verifiable (not vague)
 - [ ] No story depends on a later story (only earlier stories)
 - [ ] Dependencies added with `bd dep add` after creating beads
