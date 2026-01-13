@@ -67,7 +67,7 @@ That's it! Ralph will work through your tasks autonomously.
 
 ### Alternative: With Beads Tracker
 
-If you use [Beads](https://github.com/anthropics/beads) for issue tracking:
+If you use [Beads](https://github.com/steveyegge/beads) for issue tracking:
 
 ```bash
 # Run with an epic
@@ -757,14 +757,18 @@ ralph-tui/
 │   └── ralph-tui-create-beads/
 ```
 
-### Key Technologies
+### Key Technologies & Credits
+
+Ralph TUI is built with:
 
 - [Bun](https://bun.sh) - JavaScript runtime
-- [OpenTUI](https://github.com/AshMartian/opentui) - Terminal UI framework
+- [OpenTUI](https://github.com/anomalyco/opentui) - Terminal UI framework
 - [React](https://react.dev) - Component model for TUI
 - [Handlebars](https://handlebarsjs.com) - Prompt templating
 - [Zod](https://zod.dev) - Configuration validation
 - [smol-toml](https://github.com/squirrelchat/smol-toml) - TOML parsing
+
+Thanks to Geoffrey Huntley for the [original Raplh Wiggum loop concept](https://ghuntley.com/ralph/).
 
 ---
 
@@ -773,10 +777,3 @@ ralph-tui/
 MIT License - see [LICENSE](LICENSE) for details.
 
 ---
-
-## Credits
-
-Ralph TUI is built with:
-- [OpenTUI](https://github.com/AshMartian/opentui) - Terminal UI framework for Bun
-- [Handlebars](https://handlebarsjs.com/) - Template engine
-- [Zod](https://zod.dev/) - Schema validation
