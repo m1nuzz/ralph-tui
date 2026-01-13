@@ -171,9 +171,11 @@ Each story's acceptance criteria should include:
 
 ## Output Location
 
-Default: `./prd.json` (project root)
+Default: `./tasks/prd.json` (alongside the PRD markdown files)
 
-Or specify a path - ralph-tui will use it with:
+This keeps all PRD-related files together in the `tasks/` directory.
+
+Or specify a different path - ralph-tui will use it with:
 ```bash
 ralph-tui run --prd ./path/to/prd.json
 ```
@@ -285,7 +287,7 @@ For UI stories, also include:
 
 After creating prd.json:
 ```bash
-ralph-tui run --prd ./prd.json
+ralph-tui run --prd ./tasks/prd.json
 ```
 
 Ralph-tui will:

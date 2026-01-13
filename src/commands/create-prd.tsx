@@ -245,8 +245,8 @@ export async function executeCreatePrdCommand(args: string[]): Promise<void> {
     const runArgs: string[] = [];
 
     if (result.selectedTracker === 'json') {
-      // JSON tracker: pass the prd.json path
-      runArgs.push('--prd', 'scripts/ralph/prd.json');
+      // JSON tracker: pass the prd.json path (skill creates it in tasks/ alongside PRD markdown)
+      runArgs.push('--prd', './tasks/prd.json');
     }
     // For beads: no args needed, epic selection will show
 
