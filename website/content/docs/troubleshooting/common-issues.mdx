@@ -28,7 +28,7 @@ cat prd.json | jq '.userStories[] | {id, title, passes}'
 
 - Check that your epic has open tasks:
   ```bash
-  bd list --epic your-epic-id
+  bd list --id your-epic-id
   ```
 - Verify tasks aren't blocked by dependencies:
   ```bash
