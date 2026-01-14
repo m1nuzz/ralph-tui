@@ -158,9 +158,14 @@ export function ChatView({
     }
   }, [inputValue]);
 
-  // Handle submit - get value from textarea ref and pass it directly
+  // Handle submit - get value from textarea ref and pass it directly, then clear
   const handleSubmit = useCallback(() => {
     const currentValue = textareaRef.current?.plainText ?? '';
+    // Clear the textarea immediately before calling onSubmit
+    // This ensures the input is cleared even if there's a delay
+    if (textareaRef.current) {
+      textareaRef.current.editBuffer.setText('');
+    }
     onSubmit?.(currentValue);
   }, [onSubmit]);
 
