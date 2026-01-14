@@ -10,6 +10,7 @@ export interface DroidCommandArgs {
   cwd: string;
   model?: string;
   reasoningEffort?: string;
+  skipPermissions?: boolean;
 }
 
 export function buildDroidCommandArgs({
@@ -17,6 +18,7 @@ export function buildDroidCommandArgs({
   cwd,
   model,
   reasoningEffort,
+  skipPermissions,
 }: DroidCommandArgs): string[] {
   const args: string[] = [...DROID_NON_INTERACTIVE_FLAGS];
 
@@ -26,6 +28,10 @@ export function buildDroidCommandArgs({
 
   if (reasoningEffort) {
     args.push('--reasoning-effort', reasoningEffort);
+  }
+
+  if (skipPermissions) {
+    args.push('--skip-permissions-unsafe');
   }
 
   args.push(prompt, '--cwd', cwd);

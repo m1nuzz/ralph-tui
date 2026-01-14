@@ -11,6 +11,7 @@ export const DroidAgentConfigSchema = z
   .object({
     model: z.string().optional(),
     reasoningEffort: DroidReasoningEffortSchema.optional(),
+    skipPermissions: z.boolean().optional().default(false),
   })
   .passthrough();
 

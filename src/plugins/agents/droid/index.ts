@@ -30,6 +30,7 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
 
   private model?: string;
   private reasoningEffort?: DroidReasoningEffort;
+  private skipPermissions = false;
 
   override async initialize(config: Record<string, unknown>): Promise<void> {
     await super.initialize(config);
@@ -37,6 +38,7 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     const parsed = DroidAgentConfigSchema.safeParse({
       model: config.model,
       reasoningEffort: config.reasoningEffort,
+      skipPermissions: config.skipPermissions,
     });
 
     if (!parsed.success) {
@@ -49,6 +51,11 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
 
     if (parsed.data.reasoningEffort) {
       this.reasoningEffort = parsed.data.reasoningEffort;
+    }
+
+    this.skipPermissions = parsed.data.skipPermissions;
+    if (this.skipPermissions) {
+      console.warn('[droid] Skip permissions mode enabled; running with --skip-permissions-unsafe');
     }
   }
 
@@ -63,6 +70,7 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
       cwd,
       model: this.model,
       reasoningEffort: this.reasoningEffort,
+      skipPermissions: this.skipPermissions,
     });
   }
 }
