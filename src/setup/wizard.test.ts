@@ -265,6 +265,7 @@ describe('runSetupWizard', () => {
 
 describe('checkAndRunSetup', () => {
   let tempDir: string;
+  let consoleLogSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
     tempDir = await createTempDir();
@@ -275,10 +276,11 @@ describe('checkAndRunSetup', () => {
     mockPromptBoolean = () => Promise.resolve(false);
 
     // Suppress console output
-    spyOn(console, 'log').mockImplementation(() => {});
+    consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
   });
 
   afterEach(async () => {
+    consoleLogSpy.mockRestore();
     await rm(tempDir, { recursive: true, force: true });
   });
 
