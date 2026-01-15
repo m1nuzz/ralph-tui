@@ -474,7 +474,7 @@ function TimingSummary({ timing }: { timing?: IterationTimingInfo }): ReactNode 
   const modelDisplay = timing.model
     ? (() => {
         const [provider, model] = timing.model!.includes('/') ? timing.model!.split('/') : ['', timing.model!];
-        return { provider, model, full: timing.model! };
+        return { provider, model, full: timing.model!, display: provider ? `${provider}/${model}` : model };
       })()
     : null;
 
@@ -492,9 +492,7 @@ function TimingSummary({ timing }: { timing?: IterationTimingInfo }): ReactNode 
       {modelDisplay && (
         <box style={{ flexDirection: 'row', marginBottom: 1 }}>
           <text fg={colors.fg.muted}>Model: </text>
-          <text fg={colors.accent.primary}>
-            {modelDisplay.provider}/{modelDisplay.model}
-          </text>
+          <text fg={colors.accent.primary}>{modelDisplay.display}</text>
         </box>
       )}
       {/* Timing info row */}
@@ -567,14 +565,14 @@ function TaskOutputView({
       return iterationOutput;
     }
     // For completed output (historical or from current session), parse to extract readable content
-    return parseAgentOutput(iterationOutput);
-  }, [iterationOutput, iterationTiming?.isRunning]);
+    return parseAgentOutput(iterationOutput, agentName);
+  }, [iterationOutput, iterationTiming?.isRunning, agentName]);
 
   // Parse model info for display
   const modelDisplay = currentModel
     ? (() => {
         const [provider, model] = currentModel.includes('/') ? currentModel.split('/') : ['', currentModel];
-        return { provider, model, full: currentModel };
+        return { provider, model, full: currentModel, display: provider ? `${provider}/${model}` : model };
       })()
     : null;
 
@@ -594,7 +592,7 @@ function TaskOutputView({
             {agentName && <text fg={colors.accent.secondary}>{agentName}</text>}
             {agentName && modelDisplay && <text fg={colors.fg.muted}>|</text>}
             {modelDisplay && (
-              <text fg={colors.accent.primary}>{modelDisplay.provider}/{modelDisplay.model}</text>
+              <text fg={colors.accent.primary}>{modelDisplay.display}</text>
             )}
           </box>
         )}

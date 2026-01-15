@@ -82,7 +82,6 @@ timeout = 300000    # 5 minute timeout
 [agents.options]
 model = "sonnet"
 printMode = "text"
-skipPermissions = true
 ```
 
 ### Options Reference
@@ -91,7 +90,6 @@ skipPermissions = true
 |--------|------|---------|-------------|
 | `model` | string | - | Model variant: `sonnet`, `opus`, or `haiku` |
 | `printMode` | string | `"text"` | Output mode: `text`, `json`, or `stream` |
-| `skipPermissions` | boolean | `true` | Enable `--dangerously-skip-permissions` |
 | `timeout` | number | `0` | Execution timeout in ms (0 = no timeout) |
 | `command` | string | `"claude"` | Path to Claude CLI executable |
 
@@ -151,18 +149,11 @@ Subagent tracing requires Claude's streaming JSON output. Ralph TUI automaticall
 
 ## Autonomous Operation
 
-By default, Claude Code prompts for permission before modifying files. Ralph TUI runs with `--dangerously-skip-permissions` to enable fully autonomous operation.
+Ralph TUI runs Claude Code with `--dangerously-skip-permissions` for fully autonomous operation. This is required because ralph-tui cannot relay interactive prompts back to the agent.
 
-<Callout type="warning">
-Only use autonomous mode with trusted task inputs. Claude will execute file modifications, terminal commands, and more without asking.
+<Callout type="info">
+Claude will execute file modifications, terminal commands, and more without asking for confirmation. Review tasks carefully before starting execution.
 </Callout>
-
-To disable autonomous mode (require confirmations):
-
-```toml
-[agentOptions]
-skipPermissions = false
-```
 
 ## File Context
 
@@ -191,7 +182,7 @@ claude \
   --verbose \                           # When tracing enabled
   --output-format stream-json \         # When tracing enabled
   --model sonnet \                      # If model specified
-  --dangerously-skip-permissions \      # If skipPermissions true
+  --dangerously-skip-permissions \      # Always enabled
   --add-dir /path/to/context \          # From file context
   < prompt.txt                          # Prompt via stdin
 ```

@@ -5,6 +5,14 @@
  * Includes streaming parser for real-time output processing.
  */
 
+import {
+  DroidCostAccumulator,
+  formatDroidCostSummary,
+  formatDroidEventForDisplay,
+  parseDroidJsonlLine,
+  type DroidJsonlMessage,
+} from '../plugins/agents/droid/outputParser.js';
+
 /**
  * Known JSONL event types from agent output.
  * Claude Code emits events like 'result', 'assistant', 'tool_use', etc.
@@ -41,6 +49,10 @@ interface AssistantEvent {
 interface AgentEvent {
   type: AgentEventType;
   [key: string]: unknown;
+}
+
+function isDroidAgent(agentPlugin?: string): boolean {
+  return agentPlugin?.toLowerCase().includes('droid') ?? false;
 }
 
 /**
@@ -101,7 +113,7 @@ function parseJsonlLine(line: string): string | undefined {
  * @param rawOutput - The raw stdout from the agent
  * @returns Parsed readable content
  */
-export function parseAgentOutput(rawOutput: string): string {
+export function parseAgentOutput(rawOutput: string, agentPlugin?: string): string {
   if (!rawOutput || !rawOutput.trim()) {
     return '';
   }
@@ -109,9 +121,26 @@ export function parseAgentOutput(rawOutput: string): string {
   const lines = rawOutput.split('\n');
   const parsedParts: string[] = [];
   const plainTextLines: string[] = [];
+  const useDroidParser = isDroidAgent(agentPlugin);
+  const droidCostAccumulator = useDroidParser ? new DroidCostAccumulator() : null;
   let hasJsonl = false;
 
   for (const line of lines) {
+    if (useDroidParser) {
+      const droidResult = parseDroidJsonlLine(line);
+      if (droidResult.success) {
+        hasJsonl = true;
+        if (droidResult.message.cost && droidCostAccumulator) {
+          droidCostAccumulator.add(droidResult.message.cost);
+        }
+        const droidDisplay = formatDroidEventForDisplay(droidResult.message);
+        if (droidDisplay !== undefined) {
+          parsedParts.push(droidDisplay);
+          continue;
+        }
+      }
+    }
+
     // Try to parse as JSONL
     const parsed = parseJsonlLine(line);
     if (parsed !== undefined) {
@@ -121,6 +150,10 @@ export function parseAgentOutput(rawOutput: string): string {
       // Non-JSON line that's not empty - might be plain text output
       plainTextLines.push(line);
     }
+  }
+
+  if (useDroidParser && droidCostAccumulator?.hasData()) {
+    parsedParts.push(formatDroidCostSummary(droidCostAccumulator.getSummary()));
   }
 
   // If we found JSONL content, return the extracted parts
@@ -174,6 +207,10 @@ export function formatOutputForDisplay(output: string, maxLines?: number): strin
  */
 const MAX_PARSED_OUTPUT_SIZE = 100_000;
 
+export interface StreamingOutputParserOptions {
+  agentPlugin?: string;
+}
+
 /**
  * Streaming output parser for real-time JSONL processing.
  * Extracts readable content from chunks as they arrive, keeping
@@ -188,6 +225,28 @@ export class StreamingOutputParser {
   private buffer = '';
   private parsedOutput = '';
   private lastResultText = '';
+  private lastCostSummary = '';
+  private isDroid: boolean;
+  private droidCostAccumulator?: DroidCostAccumulator;
+
+  constructor(options: StreamingOutputParserOptions = {}) {
+    this.isDroid = isDroidAgent(options.agentPlugin);
+    if (this.isDroid) {
+      this.droidCostAccumulator = new DroidCostAccumulator();
+    }
+  }
+
+  /**
+   * Update the agent plugin type.
+   * Call this when the agent changes to ensure proper parsing.
+   */
+  setAgentPlugin(agentPlugin: string): void {
+    const wasDroid = this.isDroid;
+    this.isDroid = isDroidAgent(agentPlugin);
+    if (this.isDroid && !wasDroid) {
+      this.droidCostAccumulator = new DroidCostAccumulator();
+    }
+  }
 
   /**
    * Push a chunk of raw output data.
@@ -231,6 +290,31 @@ export class StreamingOutputParser {
   private extractReadableContent(line: string): string | undefined {
     const trimmed = line.trim();
     if (!trimmed) return undefined;
+
+    if (this.isDroid) {
+      const droidResult = parseDroidJsonlLine(trimmed);
+      if (droidResult.success) {
+        if (droidResult.message.cost && this.droidCostAccumulator) {
+          this.droidCostAccumulator.add(droidResult.message.cost);
+        }
+
+        const costSummary = this.formatDroidCostSummaryIfFinal(droidResult.message);
+        const droidDisplay = formatDroidEventForDisplay(droidResult.message);
+
+        if (droidDisplay && costSummary) {
+          return `${droidDisplay}\n${costSummary}`;
+        }
+        if (droidDisplay) {
+          return droidDisplay;
+        }
+        if (costSummary) {
+          return costSummary;
+        }
+        // Droid event was recognized but nothing to display (e.g., user input echo)
+        // Return undefined to skip rather than falling through to generic parsing
+        return undefined;
+      }
+    }
 
     // Not JSON - return as plain text if it's not just whitespace
     if (!trimmed.startsWith('{')) {
@@ -291,6 +375,35 @@ export class StreamingOutputParser {
     }
   }
 
+  private formatDroidCostSummaryIfFinal(message: DroidJsonlMessage): string | undefined {
+    if (!this.droidCostAccumulator || !this.droidCostAccumulator.hasData()) {
+      return undefined;
+    }
+
+    const type = message.type?.toLowerCase();
+    const raw = message.raw;
+    const isFinal =
+      type === 'result' ||
+      type === 'final' ||
+      type === 'done' ||
+      type === 'summary' ||
+      raw.final === true ||
+      raw.done === true ||
+      raw.completed === true;
+
+    if (!isFinal) {
+      return undefined;
+    }
+
+    const summary = formatDroidCostSummary(this.droidCostAccumulator.getSummary());
+    if (summary === this.lastCostSummary) {
+      return undefined;
+    }
+
+    this.lastCostSummary = summary;
+    return summary;
+  }
+
   /**
    * Get the accumulated parsed output.
    * This is the readable content extracted from all chunks so far.
@@ -314,5 +427,9 @@ export class StreamingOutputParser {
     this.buffer = '';
     this.parsedOutput = '';
     this.lastResultText = '';
+    this.lastCostSummary = '';
+    if (this.droidCostAccumulator) {
+      this.droidCostAccumulator = new DroidCostAccumulator();
+    }
   }
 }

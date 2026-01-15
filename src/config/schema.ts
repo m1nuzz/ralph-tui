@@ -108,6 +108,7 @@ export const StoredConfigSchema = z
 
     // Agent-specific options (shorthand for common settings)
     agent: z.string().optional(),
+    agentCommand: z.string().optional(),
     agentOptions: AgentOptionsSchema.optional(),
 
     // Tracker-specific options (shorthand for common settings)

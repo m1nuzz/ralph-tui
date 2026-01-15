@@ -152,6 +152,9 @@ export interface StoredConfig {
   /** Shorthand: agent plugin name */
   agent?: string;
 
+  /** Legacy alias: agent command name */
+  agentCommand?: string;
+
   /** Shorthand: tracker plugin name */
   tracker?: string;
 

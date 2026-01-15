@@ -20,6 +20,7 @@ import type { AgentPluginConfig } from '../plugins/agents/types.js';
 import type { TrackerPluginConfig } from '../plugins/trackers/types.js';
 import { getAgentRegistry } from '../plugins/agents/registry.js';
 import { getTrackerRegistry } from '../plugins/trackers/registry.js';
+import { DroidAgentConfigSchema } from '../plugins/agents/droid/schema.js';
 import {
   validateStoredConfig,
   formatConfigErrors,
@@ -140,6 +141,7 @@ function mergeConfigs(global: StoredConfig, project: StoredConfig): StoredConfig
   if (project.iterationDelay !== undefined) merged.iterationDelay = project.iterationDelay;
   if (project.outputDir !== undefined) merged.outputDir = project.outputDir;
   if (project.agent !== undefined) merged.agent = project.agent;
+  if (project.agentCommand !== undefined) merged.agentCommand = project.agentCommand;
   if (project.tracker !== undefined) merged.tracker = project.tracker;
 
   // Replace arrays entirely if present in project config
@@ -325,19 +327,21 @@ function getDefaultAgentConfig(
     return undefined;
   }
 
+  const shorthandAgent = storedConfig.agent ?? storedConfig.agentCommand;
+
   // Check shorthand agent field (e.g., agent = "claude" in TOML)
-  if (storedConfig.agent) {
+  if (shorthandAgent) {
     // First check if it matches a configured agent in agents array
     const found = storedConfig.agents?.find(
-      (a) => a.name === storedConfig.agent || a.plugin === storedConfig.agent
+      (a) => a.name === shorthandAgent || a.plugin === shorthandAgent
     );
     if (found) return applyAgentOptions(found);
 
     // Create config for the shorthand plugin
-    if (registry.hasPlugin(storedConfig.agent)) {
+    if (registry.hasPlugin(shorthandAgent)) {
       return applyAgentOptions({
-        name: storedConfig.agent,
-        plugin: storedConfig.agent,
+        name: shorthandAgent,
+        plugin: shorthandAgent,
         options: {},
       });
     }
@@ -553,6 +557,16 @@ export async function validateConfig(
   const agentRegistry = getAgentRegistry();
   if (!agentRegistry.hasPlugin(config.agent.plugin)) {
     errors.push(`Agent plugin '${config.agent.plugin}' not found`);
+  }
+
+  if (config.agent.plugin === 'droid') {
+    const result = DroidAgentConfigSchema.safeParse(config.agent.options ?? {});
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+        errors.push(`Droid agent config ${path}: ${issue.message}`);
+      }
+    }
   }
 
   // Validate tracker plugin exists

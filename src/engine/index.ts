@@ -34,6 +34,7 @@ import { getTrackerRegistry } from '../plugins/trackers/registry.js';
 import { SubagentTraceParser } from '../plugins/agents/tracing/parser.js';
 import type { SubagentEvent } from '../plugins/agents/tracing/types.js';
 import { ClaudeAgentPlugin } from '../plugins/agents/builtin/claude.js';
+import { createDroidStreamingJsonlParser, isDroidJsonlMessage, toClaudeJsonlMessages } from '../plugins/agents/droid/outputParser.js';
 import { updateSessionIteration, updateSessionStatus, updateSessionMaxIterations } from '../session/index.js';
 import { saveIterationLog, buildSubagentTrace, createProgressEntry, appendProgress, getRecentProgressSummary } from '../logs/index.js';
 import type { AgentSwitchEntry } from '../logs/index.js';
@@ -723,7 +724,9 @@ export class ExecutionEngine {
 
     // Create streaming JSONL parser if tracing is enabled
     const jsonlParser = supportsTracing
-      ? ClaudeAgentPlugin.createStreamingJsonlParser()
+      ? this.agent?.meta.id === 'droid'
+        ? createDroidStreamingJsonlParser()
+        : ClaudeAgentPlugin.createStreamingJsonlParser()
       : null;
 
     try {
@@ -747,7 +750,13 @@ export class ExecutionEngine {
             const results = jsonlParser.push(data);
             for (const result of results) {
               if (result.success) {
-                this.subagentParser.processMessage(result.message);
+                if (isDroidJsonlMessage(result.message)) {
+                  for (const normalized of toClaudeJsonlMessages(result.message)) {
+                    this.subagentParser.processMessage(normalized);
+                  }
+                } else {
+                  this.subagentParser.processMessage(result.message);
+                }
               }
             }
           }
@@ -775,7 +784,13 @@ export class ExecutionEngine {
         const remaining = jsonlParser.flush();
         for (const result of remaining) {
           if (result.success) {
-            this.subagentParser.processMessage(result.message);
+            if (isDroidJsonlMessage(result.message)) {
+              for (const normalized of toClaudeJsonlMessages(result.message)) {
+                this.subagentParser.processMessage(normalized);
+              }
+            } else {
+              this.subagentParser.processMessage(result.message);
+            }
           }
         }
       }
