@@ -37,8 +37,14 @@ export class SandboxWrapper {
       return { command, args };
     }
 
-    if (this.config.mode && this.config.mode !== 'auto' && this.config.mode !== 'bwrap') {
+    const mode = this.config.mode ?? 'auto';
+
+    if (mode !== 'auto' && mode !== 'bwrap' && mode !== 'docker') {
       return { command, args };
+    }
+
+    if (mode === 'docker') {
+      return this.wrapWithDocker(command, args, options);
     }
 
     return this.wrapWithBwrap(command, args, options);
@@ -87,6 +93,49 @@ export class SandboxWrapper {
     bwrapArgs.push('--chdir', workDir, '--', command, ...args);
 
     return { command: 'bwrap', args: bwrapArgs };
+  }
+
+  wrapWithDocker(
+    command: string,
+    args: string[],
+    options: SandboxWrapOptions = {}
+  ): WrappedCommand {
+    const cwd = options.cwd ?? process.cwd();
+    const workDir = resolve(cwd);
+    const dockerArgs: string[] = ['run', '--rm', '-i'];
+
+    if (this.config.network === false) {
+      dockerArgs.push('--network', 'none');
+    }
+
+    const readWritePaths = new Set<string>([
+      workDir,
+      ...this.normalizePaths(this.config.allowPaths ?? [], workDir),
+    ]);
+    const readOnlyPaths = new Set<string>([
+      ...this.normalizePaths(this.config.readOnlyPaths ?? [], workDir),
+      ...this.normalizePaths(this.getRequirementPaths(), workDir),
+    ]);
+
+    for (const path of readWritePaths) {
+      readOnlyPaths.delete(path);
+    }
+
+    for (const path of readWritePaths) {
+      if (existsSync(path)) {
+        dockerArgs.push('-v', `${path}:${path}:rw`);
+      }
+    }
+
+    for (const path of readOnlyPaths) {
+      if (existsSync(path)) {
+        dockerArgs.push('-v', `${path}:${path}:ro`);
+      }
+    }
+
+    dockerArgs.push('-w', workDir, this.config.image ?? 'ubuntu:22.04', command, ...args);
+
+    return { command: 'docker', args: dockerArgs };
   }
 
   private getRequirementPaths(): string[] {
