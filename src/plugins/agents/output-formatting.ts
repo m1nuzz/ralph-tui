@@ -1,6 +1,11 @@
 /**
  * ABOUTME: Shared output formatting utilities for agent plugins.
  * Provides ANSI colors and consistent tool call formatting across all agents.
+ *
+ * Architecture:
+ * - Agents parse their specific output format into AgentDisplayEvent[]
+ * - This module decides WHAT to display (via processAgentEvents)
+ * - This module decides HOW to display it (via format* functions)
  */
 
 /**
@@ -167,4 +172,58 @@ export function formatToolCall(toolName: string, input?: ToolInputFormatters): s
   }
 
   return parts.join(' ') + '\n';
+}
+
+/**
+ * Common event types that agents can emit.
+ * Agents parse their specific output format into these standardized events.
+ */
+export type AgentDisplayEvent =
+  | { type: 'text'; content: string }
+  | { type: 'tool_use'; name: string; input?: Record<string, unknown> }
+  | { type: 'tool_result'; content?: string }
+  | { type: 'error'; message: string }
+  | { type: 'system'; subtype?: string; content?: string };
+
+/**
+ * Process agent events and format for display.
+ * This is the SINGLE place that decides what to show - all agents use this.
+ *
+ * Display rules (consistent across all agents):
+ * - text: Always displayed
+ * - tool_use: Always displayed (formatted with tool name and key inputs)
+ * - tool_result: Skipped (contains raw output like file contents)
+ * - error: Always displayed
+ * - system: Skipped (init, hooks, metadata)
+ *
+ * @param events Array of parsed agent events
+ * @returns Formatted string for display
+ */
+export function processAgentEvents(events: AgentDisplayEvent[]): string {
+  const parts: string[] = [];
+
+  for (const event of events) {
+    switch (event.type) {
+      case 'text':
+        if (event.content) {
+          parts.push(event.content);
+        }
+        break;
+
+      case 'tool_use':
+        parts.push(formatToolCall(event.name, event.input as ToolInputFormatters));
+        break;
+
+      case 'error':
+        parts.push('\n' + formatError(event.message) + '\n');
+        break;
+
+      // Intentionally skip these for clean output:
+      case 'tool_result':
+      case 'system':
+        break;
+    }
+  }
+
+  return parts.join('');
 }

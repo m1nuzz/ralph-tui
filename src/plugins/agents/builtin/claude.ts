@@ -7,7 +7,7 @@
 
 import { spawn } from 'node:child_process';
 import { BaseAgentPlugin, findCommandPath } from '../base.js';
-import { formatToolCall, formatError } from '../output-formatting.js';
+import { processAgentEvents, type AgentDisplayEvent } from '../output-formatting.js';
 import type {
   AgentPluginMeta,
   AgentPluginFactory,
@@ -335,67 +335,76 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
   }
 
   /**
-   * Parse a Claude JSONL event and extract displayable content.
-   * Returns formatted string for TUI display, or empty string if not displayable.
+   * Parse a Claude JSONL line into standardized display events.
+   * Returns AgentDisplayEvent[] - the shared processAgentEvents decides what to show.
    *
-   * Claude CLI stream-json format event types:
+   * Claude CLI stream-json format:
    * - "assistant": AI responses with content[] containing text and tool_use blocks
-   * - "user": Tool results (contains file contents, command output) - SKIP for cleaner display
-   * - "system": Hooks, init data - SKIP
-   * - "result": Final result summary - SKIP (duplicates assistant content)
-   * - "error": Error messages - display
-   *
-   * We only display "assistant" events (text and tool calls) for clean output like opencode.
+   * - "user": Tool results (contains file contents, command output)
+   * - "system": Hooks, init data
+   * - "result": Final result summary
+   * - "error": Error messages
    */
-  private parseClaudeEventForDisplay(jsonLine: string): string {
-    if (!jsonLine || jsonLine.length === 0) return '';
+  private parseClaudeJsonLine(jsonLine: string): AgentDisplayEvent[] {
+    if (!jsonLine || jsonLine.length === 0) return [];
 
     try {
       const event = JSON.parse(jsonLine) as Record<string, unknown>;
+      const events: AgentDisplayEvent[] = [];
 
-      // Only handle assistant messages - skip system, user (tool results), and result events
+      // Parse assistant messages (text and tool use)
       if (event.type === 'assistant' && event.message) {
         const message = event.message as { content?: Array<Record<string, unknown>> };
         if (message.content && Array.isArray(message.content)) {
-          const parts: string[] = [];
           for (const block of message.content) {
             if (block.type === 'text' && typeof block.text === 'string') {
-              parts.push(block.text);
+              events.push({ type: 'text', content: block.text });
             } else if (block.type === 'tool_use' && typeof block.name === 'string') {
-              parts.push(formatToolCall(block.name, block.input as Record<string, unknown>));
+              events.push({
+                type: 'tool_use',
+                name: block.name,
+                input: block.input as Record<string, unknown>,
+              });
             }
-          }
-          if (parts.length > 0) {
-            return parts.join('');
           }
         }
       }
 
-      // Handle error events
+      // Parse user/tool_result events
+      if (event.type === 'user') {
+        events.push({ type: 'tool_result' });
+      }
+
+      // Parse system events
+      if (event.type === 'system') {
+        events.push({ type: 'system', subtype: event.subtype as string });
+      }
+
+      // Parse error events
       if (event.type === 'error' || event.error) {
         const errorMsg = typeof event.error === 'string'
           ? event.error
           : (event.error as { message?: string })?.message ?? 'Unknown error';
-        return '\n' + formatError(errorMsg) + '\n';
+        events.push({ type: 'error', message: errorMsg });
       }
 
-      // Skip all other event types (system, user, result) for clean output
-      return '';
+      return events;
     } catch {
-      // Not valid JSON - skip (don't pass through random text)
-      return '';
+      // Not valid JSON - skip
+      return [];
     }
   }
 
   /**
-   * Process Claude stream output - parses JSONL events and formats for display.
+   * Process Claude stream output - parses JSONL and uses shared display logic.
    */
   private processClaudeOutput(data: string): string {
-    return data
-      .split('\n')
-      .map((line) => this.parseClaudeEventForDisplay(line.trim()))
-      .filter((content) => content.length > 0)
-      .join('');
+    const allEvents: AgentDisplayEvent[] = [];
+    for (const line of data.split('\n')) {
+      const events = this.parseClaudeJsonLine(line.trim());
+      allEvents.push(...events);
+    }
+    return processAgentEvents(allEvents);
   }
 
   /**

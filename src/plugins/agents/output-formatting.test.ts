@@ -234,3 +234,76 @@ describe('formatToolCall', () => {
     expect(result).toContain('http://x');
   });
 });
+
+describe('processAgentEvents', () => {
+  // Import needed for these tests
+  const { processAgentEvents } = require('./output-formatting.js');
+
+  test('displays text events', () => {
+    const events = [{ type: 'text', content: 'Hello world' }];
+    const result = processAgentEvents(events);
+    expect(result).toBe('Hello world');
+  });
+
+  test('displays tool_use events with formatting', () => {
+    const events = [{ type: 'tool_use', name: 'read', input: { file_path: '/test.ts' } }];
+    const result = processAgentEvents(events);
+    expect(result).toContain('[read]');
+    expect(result).toContain('/test.ts');
+  });
+
+  test('displays error events', () => {
+    const events = [{ type: 'error', message: 'Something went wrong' }];
+    const result = processAgentEvents(events);
+    expect(result).toContain('[Error: Something went wrong]');
+  });
+
+  test('skips tool_result events', () => {
+    const events = [
+      { type: 'text', content: 'Before' },
+      { type: 'tool_result', content: 'This should not appear' },
+      { type: 'text', content: 'After' },
+    ];
+    const result = processAgentEvents(events);
+    expect(result).toBe('BeforeAfter');
+    expect(result).not.toContain('should not appear');
+  });
+
+  test('skips system events', () => {
+    const events = [
+      { type: 'text', content: 'Before' },
+      { type: 'system', subtype: 'init' },
+      { type: 'text', content: 'After' },
+    ];
+    const result = processAgentEvents(events);
+    expect(result).toBe('BeforeAfter');
+  });
+
+  test('processes mixed events correctly', () => {
+    const events = [
+      { type: 'text', content: 'Starting task\n' },
+      { type: 'tool_use', name: 'bash', input: { command: 'ls' } },
+      { type: 'tool_result' },
+      { type: 'text', content: 'Done!' },
+    ];
+    const result = processAgentEvents(events);
+    expect(result).toContain('Starting task');
+    expect(result).toContain('[bash]');
+    expect(result).toContain('$ ls');
+    expect(result).toContain('Done!');
+  });
+
+  test('returns empty string for empty events array', () => {
+    const result = processAgentEvents([]);
+    expect(result).toBe('');
+  });
+
+  test('skips text events with empty content', () => {
+    const events = [
+      { type: 'text', content: '' },
+      { type: 'text', content: 'visible' },
+    ];
+    const result = processAgentEvents(events);
+    expect(result).toBe('visible');
+  });
+});

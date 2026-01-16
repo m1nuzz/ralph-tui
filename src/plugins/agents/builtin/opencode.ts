@@ -7,7 +7,7 @@
 
 import { spawn } from 'node:child_process';
 import { BaseAgentPlugin, findCommandPath } from '../base.js';
-import { formatToolCall, formatError } from '../output-formatting.js';
+import { processAgentEvents, type AgentDisplayEvent } from '../output-formatting.js';
 import type {
   AgentPluginMeta,
   AgentPluginFactory,
@@ -19,65 +19,78 @@ import type {
 } from '../types.js';
 
 /**
- * Parse opencode JSON event and extract displayable content.
- * Returns formatted string for TUI display, or empty string if not displayable.
+ * Parse opencode JSON line into standardized display events.
+ * Returns AgentDisplayEvent[] - the shared processAgentEvents decides what to show.
+ *
+ * OpenCode event types:
+ * - "text": Main text output from the LLM
+ * - "tool_use": Tool being called
+ * - "tool_result": Tool completed (results)
+ * - "step_start"/"step_finish": Step markers
+ * - "error": Error from opencode
  */
-function parseOpenCodeEvent(jsonLine: string): string {
-  if (!jsonLine || jsonLine.length === 0) return '';
+function parseOpenCodeJsonLine(jsonLine: string): AgentDisplayEvent[] {
+  if (!jsonLine || jsonLine.length === 0) return [];
 
   try {
     const event = JSON.parse(jsonLine);
+    const events: AgentDisplayEvent[] = [];
 
     switch (event.type) {
       case 'text':
         // Main text output from the LLM
-        return event.part?.text || '';
+        if (event.part?.text) {
+          events.push({ type: 'text', content: event.part.text });
+        }
+        break;
 
       case 'tool_use': {
         // Tool being called - show name and relevant details
         // opencode structure: event.part.state.input contains tool arguments
         const toolName = event.part?.tool || event.part?.name || 'unknown';
         const toolInput = event.part?.state?.input;
-        return formatToolCall(toolName, toolInput);
+        events.push({ type: 'tool_use', name: toolName, input: toolInput });
+        break;
       }
 
       case 'tool_result':
-        // Tool completed - skip to reduce noise
-        return '';
+        // Tool completed - mark as tool_result (shared logic will skip)
+        events.push({ type: 'tool_result' });
+        break;
 
       case 'step_start':
       case 'step_finish':
-        // Step markers - skip for cleaner output
-        return '';
+        // Step markers - treat as system events (shared logic will skip)
+        events.push({ type: 'system', subtype: event.type });
+        break;
 
       case 'error':
         // Error from opencode
-        return '\n' + formatError(event.error?.message || 'Unknown error') + '\n';
-
-      default:
-        // Unknown event type - skip
-        return '';
+        events.push({ type: 'error', message: event.error?.message || 'Unknown error' });
+        break;
     }
+
+    return events;
   } catch {
     // Not valid JSON - might be plugin output like [oh-my-opencode]
-    // Pass through non-JSON lines that look like plugin messages
+    // Pass through non-JSON lines that look like plugin messages as text
     if (jsonLine.startsWith('[') && jsonLine.includes(']')) {
-      return jsonLine + '\n';
+      return [{ type: 'text', content: jsonLine + '\n' }];
     }
-    return '';
+    return [];
   }
 }
 
 /**
- * Process opencode JSON stream output.
- * Parses JSONL events and extracts displayable content.
+ * Process opencode JSON stream output - parses JSONL and uses shared display logic.
  */
 function processOpenCodeOutput(data: string): string {
-  return data
-    .split('\n')
-    .map((line) => parseOpenCodeEvent(line.trim()))
-    .filter((content) => content.length > 0)
-    .join('');
+  const allEvents: AgentDisplayEvent[] = [];
+  for (const line of data.split('\n')) {
+    const events = parseOpenCodeJsonLine(line.trim());
+    allEvents.push(...events);
+  }
+  return processAgentEvents(allEvents);
 }
 
 /**

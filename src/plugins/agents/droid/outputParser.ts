@@ -4,7 +4,7 @@
  */
 
 import type { ClaudeJsonlMessage } from '../builtin/claude.js';
-import { formatToolCall, formatError } from '../output-formatting.js';
+import { processAgentEvents, type AgentDisplayEvent } from '../output-formatting.js';
 
 export interface DroidToolCall {
   id?: string;
@@ -483,48 +483,62 @@ export function formatDroidCostSummary(summary: DroidCostSummary): string {
   return `Cost: ${costLine}${usdSuffix}`;
 }
 
-export function formatDroidEventForDisplay(message: DroidJsonlMessage): string | undefined {
+/**
+ * Parse a DroidJsonlMessage into standardized display events.
+ * Returns AgentDisplayEvent[] - the shared processAgentEvents decides what to show.
+ */
+export function parseDroidMessageToEvents(message: DroidJsonlMessage): AgentDisplayEvent[] {
+  const events: AgentDisplayEvent[] = [];
+
   // Skip user/input message events - these are just echoes of the prompt
   const eventType = message.type?.toLowerCase();
   const rawRole = typeof message.raw.role === 'string' ? message.raw.role.toLowerCase() : undefined;
   if (eventType === 'user' || eventType === 'input' || rawRole === 'user') {
-    return undefined;
+    return events;
   }
 
+  // Parse errors
   if (message.error) {
     const statusSuffix = message.error.status ? ` (status ${message.error.status})` : '';
-    return formatError(`${message.error.message}${statusSuffix}`);
+    events.push({ type: 'error', message: `${message.error.message}${statusSuffix}` });
   }
 
+  // Parse tool calls
   if (message.toolCalls && message.toolCalls.length > 0) {
-    return message.toolCalls
-      .map((call) => {
-        // Normalize arguments to Record<string, unknown> for formatToolCall
-        const input = normalizeToolInput(call.arguments);
-        return formatToolCall(call.name, input);
-      })
-      .join('');
+    for (const call of message.toolCalls) {
+      const input = normalizeToolInput(call.arguments);
+      events.push({ type: 'tool_use', name: call.name, input });
+    }
   }
 
+  // Parse tool results (shared logic will skip these)
   if (message.toolResults && message.toolResults.length > 0) {
-    return message.toolResults
-      .map((result) => {
-        const status = result.status ? ` (${result.status})` : '';
-        const content = result.content ? `: ${result.content}` : '';
-        return `Tool result${status}${content}\n`;
-      })
-      .join('');
+    events.push({ type: 'tool_result' });
   }
 
+  // Parse text content
   if (message.message) {
-    return message.message;
+    events.push({ type: 'text', content: message.message });
   }
 
   if (message.result) {
-    return message.result;
+    events.push({ type: 'text', content: message.result });
   }
 
-  return undefined;
+  return events;
+}
+
+/**
+ * Format a DroidJsonlMessage for display using shared logic.
+ * @deprecated Use parseDroidMessageToEvents + processAgentEvents instead
+ */
+export function formatDroidEventForDisplay(message: DroidJsonlMessage): string | undefined {
+  const events = parseDroidMessageToEvents(message);
+  if (events.length === 0) {
+    return undefined;
+  }
+  const result = processAgentEvents(events);
+  return result.length > 0 ? result : undefined;
 }
 
 // Strip ANSI escape sequences from a string
