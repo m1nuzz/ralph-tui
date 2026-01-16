@@ -1,16 +1,31 @@
 /**
  * ABOUTME: Shared output formatting utilities for agent plugins.
- * Provides ANSI colors and consistent tool call formatting across all agents.
+ * Provides structured output formatting for TUI-native rendering.
  *
  * Architecture:
  * - Agents parse their specific output format into AgentDisplayEvent[]
  * - This module decides WHAT to display (via processAgentEvents)
  * - This module decides HOW to display it (via format* functions)
+ * - Output is FormattedSegment[] for TUI-native color rendering
  */
 
 /**
- * ANSI color codes for terminal output formatting.
- * These render in the TUI's output panel.
+ * Semantic color names for formatted output.
+ * Maps to TUI theme colors for consistent styling.
+ */
+export type SegmentColor = 'blue' | 'purple' | 'cyan' | 'green' | 'yellow' | 'pink' | 'muted' | 'default';
+
+/**
+ * A single segment of formatted text with optional color.
+ */
+export interface FormattedSegment {
+  text: string;
+  color?: SegmentColor;
+}
+
+/**
+ * ANSI color codes for terminal output formatting (legacy/testing).
+ * Prefer FormattedSegment for TUI rendering.
  */
 export const COLORS = {
   blue: '\x1b[94m',      // Bright blue for tool names
@@ -127,8 +142,7 @@ export interface ToolInputFormatters {
 }
 
 /**
- * Format tool call details from input fields.
- * Automatically detects and formats common tool input patterns.
+ * Format tool call details from input fields (legacy string version).
  * @param toolName The tool name
  * @param input The tool input object (can have various fields)
  * @returns Formatted string for display
@@ -173,6 +187,119 @@ export function formatToolCall(toolName: string, input?: ToolInputFormatters): s
   return parts.join(' ') + '\n';
 }
 
+// ============================================================================
+// TUI-NATIVE SEGMENT-BASED FORMATTING
+// ============================================================================
+
+/**
+ * Clean a command string (remove env vars, normalize whitespace, truncate).
+ */
+function cleanCommand(command: string): string {
+  let cmd = command.replace(/\n/g, ' ').trim();
+
+  if (cmd.includes(';')) {
+    const parts = cmd.split(';');
+    cmd = parts[parts.length - 1].trim();
+  }
+
+  const envVarPattern = /^(\s*\w+=[^\s]*\s+)+/;
+  if (envVarPattern.test(cmd)) {
+    cmd = cmd.replace(envVarPattern, '').trim();
+  }
+
+  if (cmd.length > 100) {
+    cmd = cmd.slice(0, 100) + '...';
+  }
+
+  return cmd;
+}
+
+/**
+ * Format a tool call as an array of colored segments for TUI-native rendering.
+ * @param toolName The tool name
+ * @param input The tool input object
+ * @returns Array of FormattedSegment for rendering
+ */
+export function formatToolCallSegments(toolName: string, input?: ToolInputFormatters): FormattedSegment[] {
+  const segments: FormattedSegment[] = [];
+
+  // Tool name in brackets
+  segments.push({ text: `[${toolName}]`, color: 'blue' });
+
+  if (!input) {
+    segments.push({ text: '\n' });
+    return segments;
+  }
+
+  // Description (no color - default text)
+  if (input.description) {
+    segments.push({ text: ` ${input.description}` });
+  }
+
+  // Command with $ prefix (muted color for the $)
+  if (input.command) {
+    const cmd = cleanCommand(input.command);
+    segments.push({ text: ' $ ', color: 'muted' });
+    segments.push({ text: cmd });
+  }
+
+  // File path in purple
+  if (input.file_path || input.path) {
+    const path = input.file_path || input.path || '';
+    segments.push({ text: ' ' });
+    segments.push({ text: path, color: 'purple' });
+  }
+
+  // Pattern with label
+  if (input.pattern) {
+    segments.push({ text: ' pattern: ', color: 'muted' });
+    segments.push({ text: input.pattern, color: 'cyan' });
+  }
+
+  // Query with label
+  if (input.query) {
+    segments.push({ text: ' query: ', color: 'muted' });
+    segments.push({ text: input.query, color: 'yellow' });
+  }
+
+  // URL in cyan
+  if (input.url) {
+    segments.push({ text: ' ' });
+    segments.push({ text: input.url, color: 'cyan' });
+  }
+
+  // Content preview
+  if (input.content) {
+    const preview = input.content.length > 200
+      ? `${input.content.slice(0, 200)}... (${input.content.length} chars)`
+      : input.content;
+    segments.push({ text: ` "${preview}"`, color: 'muted' });
+  }
+
+  // Edit diff
+  if (input.old_string && input.new_string) {
+    segments.push({ text: ' edit: "', color: 'muted' });
+    segments.push({ text: input.old_string.slice(0, 50) + '...', color: 'pink' });
+    segments.push({ text: '" → "', color: 'muted' });
+    segments.push({ text: input.new_string.slice(0, 50) + '...', color: 'green' });
+    segments.push({ text: '"', color: 'muted' });
+  }
+
+  segments.push({ text: '\n' });
+  return segments;
+}
+
+/**
+ * Format an error message as segments.
+ */
+export function formatErrorSegments(message: string): FormattedSegment[] {
+  return [
+    { text: '\n' },
+    { text: `[Error: ${message}]`, color: 'pink' },
+    { text: '\n' },
+  ];
+}
+
 /**
  * Common event types that agents can emit.
  * Agents parse their specific output format into these standardized events.
@@ -185,16 +312,7 @@ export type AgentDisplayEvent =
   | { type: 'system'; subtype?: string; content?: string };
 
 /**
- * Process agent events and format for display.
- * This is the SINGLE place that decides what to show - all agents use this.
- *
- * Display rules (consistent across all agents):
- * - text: Always displayed
- * - tool_use: Always displayed (formatted with tool name and key inputs)
- * - tool_result: Skipped (contains raw output like file contents)
- * - error: Always displayed
- * - system: Skipped (init, hooks, metadata)
- *
+ * Process agent events and format for display (legacy string version).
  * @param events Array of parsed agent events
  * @returns Formatted string for display
  */
@@ -226,4 +344,57 @@ export function processAgentEvents(events: AgentDisplayEvent[]): string {
   }
 
   return parts.join('');
+}
+
+/**
+ * Process agent events and return TUI-native segments for rendering.
+ * This is the preferred method for TUI display.
+ *
+ * Display rules (consistent across all agents):
+ * - text: Always displayed (default color)
+ * - tool_use: Always displayed (formatted with colors)
+ * - tool_result: Skipped (contains raw output like file contents)
+ * - error: Always displayed (pink)
+ * - system: Skipped (init, hooks, metadata)
+ *
+ * @param events Array of parsed agent events
+ * @returns Array of FormattedSegment for TUI rendering
+ */
+export function processAgentEventsToSegments(events: AgentDisplayEvent[]): FormattedSegment[] {
+  const segments: FormattedSegment[] = [];
+
+  for (const event of events) {
+    switch (event.type) {
+      case 'text':
+        if (event.content) {
+          segments.push({ text: event.content });
+        }
+        break;
+
+      case 'tool_use':
+        // Tool calls always start on their own line
+        segments.push({ text: '\n' });
+        segments.push(...formatToolCallSegments(event.name, event.input as ToolInputFormatters));
+        break;
+
+      case 'error':
+        segments.push(...formatErrorSegments(event.message));
+        break;
+
+      // Intentionally skip these for clean output:
+      case 'tool_result':
+      case 'system':
+        break;
+    }
+  }
+
+  return segments;
+}
+
+/**
+ * Convert FormattedSegment array to plain string (for testing/logging).
+ * Strips all color information.
+ */
+export function segmentsToPlainText(segments: FormattedSegment[]): string {
+  return segments.map(s => s.text).join('');
 }

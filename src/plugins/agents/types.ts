@@ -5,6 +5,7 @@
  */
 
 import type { SandboxConfig } from '../../sandbox/types.js';
+import type { FormattedSegment } from './output-formatting.js';
 
 /**
  * Result of detecting whether an agent CLI is available.
@@ -103,8 +104,11 @@ export interface AgentExecuteOptions {
 
   sandbox?: SandboxConfig;
 
-  /** Callback for streaming stdout */
+  /** Callback for streaming stdout (legacy string format) */
   onStdout?: (data: string) => void;
+
+  /** Callback for streaming stdout as TUI-native segments */
+  onStdoutSegments?: (segments: FormattedSegment[]) => void;
 
   /** Callback for streaming stderr */
   onStderr?: (data: string) => void;

@@ -7,7 +7,7 @@
 
 import { spawn } from 'node:child_process';
 import { BaseAgentPlugin, findCommandPath } from '../base.js';
-import { processAgentEvents, type AgentDisplayEvent } from '../output-formatting.js';
+import { processAgentEvents, processAgentEventsToSegments, type AgentDisplayEvent } from '../output-formatting.js';
 import type {
   AgentPluginMeta,
   AgentPluginFactory,
@@ -396,36 +396,56 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
   }
 
   /**
-   * Process Claude stream output - parses JSONL and uses shared display logic.
+   * Parse Claude stream output into display events.
    */
-  private processClaudeOutput(data: string): string {
+  private parseClaudeOutputToEvents(data: string): AgentDisplayEvent[] {
     const allEvents: AgentDisplayEvent[] = [];
     for (const line of data.split('\n')) {
       const events = this.parseClaudeJsonLine(line.trim());
       allEvents.push(...events);
     }
-    return processAgentEvents(allEvents);
+    return allEvents;
   }
 
   /**
    * Override execute to parse Claude JSONL output for display.
-   * Wraps the onStdout callback to format tool calls and messages.
+   * Wraps the onStdout/onStdoutSegments callbacks to format tool calls and messages.
    */
   override execute(
     prompt: string,
     files?: AgentFileContext[],
     options?: AgentExecuteOptions
   ): AgentExecutionHandle {
-    // Wrap onStdout to parse JSONL events when using stream-json output
+    // Wrap callbacks to parse JSONL events when using stream-json output
     const isStreamingJson = options?.subagentTracing || this.printMode === 'json' || this.printMode === 'stream';
 
     const parsedOptions: AgentExecuteOptions = {
       ...options,
-      onStdout: options?.onStdout && isStreamingJson
+      // TUI-native segments callback (preferred)
+      onStdoutSegments: options?.onStdoutSegments && isStreamingJson
+        ? (/* original segments ignored - we parse from raw */) => {
+            // This callback is set up but actual segments come from wrapping onStdout below
+          }
+        : options?.onStdoutSegments,
+      // Legacy string callback or wrapper that calls both callbacks
+      onStdout: isStreamingJson && (options?.onStdout || options?.onStdoutSegments)
         ? (data: string) => {
-            const parsed = this.processClaudeOutput(data);
-            if (parsed.length > 0) {
-              options.onStdout!(parsed);
+            const events = this.parseClaudeOutputToEvents(data);
+            if (events.length > 0) {
+              // Call TUI-native segments callback if provided
+              if (options?.onStdoutSegments) {
+                const segments = processAgentEventsToSegments(events);
+                if (segments.length > 0) {
+                  options.onStdoutSegments(segments);
+                }
+              }
+              // Also call legacy string callback if provided
+              if (options?.onStdout) {
+                const parsed = processAgentEvents(events);
+                if (parsed.length > 0) {
+                  options.onStdout(parsed);
+                }
+              }
             }
           }
         : options?.onStdout,
