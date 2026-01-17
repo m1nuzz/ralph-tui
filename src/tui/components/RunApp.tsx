@@ -1051,13 +1051,14 @@ export function RunApp({
     ? selectedIteration?.task?.id
     : selectedTask?.id;
 
-  // Compute the iteration output and timing to show for the selected task
-  // - If selected task is currently executing: show live currentOutput with isRunning + segments
-  // - If selected task has a completed iteration: show that iteration's output with timing
+  // Compute the iteration output and timing to show
+  // Uses effectiveTaskId to ensure correct data is shown in both tasks and iterations views
+  // - If current task is executing: show live currentOutput with isRunning + segments
+  // - If completed iteration exists: show that iteration's output with timing
   // - Otherwise: undefined (will show "waiting" or appropriate message)
   const selectedTaskIteration = useMemo(() => {
-    // If no selected task, check if there's currently executing task and show that
-    if (!selectedTask) {
+    // If no effective task ID, check if there's currently executing task and show that
+    if (!effectiveTaskId) {
       // If there's a current task executing, show its output even if no task selected
       if (currentTaskId) {
         const timing: IterationTimingInfo = {
@@ -1071,7 +1072,8 @@ export function RunApp({
 
     // Check if this task is currently being executed
     // Use both ID match AND status check for robustness against state timing issues
-    const isExecuting = currentTaskId === selectedTask.id || selectedTask.status === 'active';
+    const isActiveTask = selectedTask?.status === 'active';
+    const isExecuting = currentTaskId === effectiveTaskId || isActiveTask;
     if (isExecuting && currentTaskId) {
       // Use the captured start time from the iteration:started event
       const timing: IterationTimingInfo = {
@@ -1082,7 +1084,7 @@ export function RunApp({
     }
 
     // Look for a completed iteration for this task (in-memory from current session)
-    const taskIteration = iterations.find((iter) => iter.task.id === selectedTask.id);
+    const taskIteration = iterations.find((iter) => iter.task.id === effectiveTaskId);
     if (taskIteration) {
       const timing: IterationTimingInfo = {
         startedAt: taskIteration.startedAt,
@@ -1099,7 +1101,7 @@ export function RunApp({
     }
 
     // Check historical output cache (loaded from disk)
-    const historicalData = historicalOutputCache.get(selectedTask.id);
+    const historicalData = historicalOutputCache.get(effectiveTaskId);
     if (historicalData !== undefined) {
       return {
         iteration: -1, // Historical iteration number unknown, use -1 to indicate "past"
@@ -1111,7 +1113,7 @@ export function RunApp({
 
     // Task hasn't been run yet (or historical log not yet loaded)
     return { iteration: 0, output: undefined, segments: undefined, timing: undefined };
-  }, [selectedTask, currentTaskId, currentIteration, currentOutput, currentSegments, iterations, historicalOutputCache]);
+  }, [effectiveTaskId, selectedTask, currentTaskId, currentIteration, currentOutput, currentSegments, iterations, historicalOutputCache, currentIterationStartedAt]);
 
   // Compute historic agent/model for display when viewing completed iterations
   // Falls back to current values if viewing a live iteration or no historic data available
