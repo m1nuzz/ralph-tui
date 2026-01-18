@@ -2,6 +2,7 @@
  * ABOUTME: Config migration utility for ralph-tui.
  * Handles automatic upgrades when users update to new versions.
  * Ensures skills and templates are updated while preserving user customizations.
+ * Supports multi-agent skill installation (Claude Code, OpenCode, Factory Droid).
  */
 
 import { access, constants } from 'node:fs/promises';
@@ -12,14 +13,23 @@ import {
   getProjectConfigPath,
 } from '../config/index.js';
 import type { StoredConfig } from '../config/types.js';
-import { listBundledSkills, installSkill } from './skill-installer.js';
+import {
+  installSkillsForAgent,
+  resolveSkillsPath,
+} from './skill-installer.js';
 import { installBuiltinTemplates } from '../templates/engine.js';
+import { getAgentRegistry } from '../plugins/agents/registry.js';
+import { registerBuiltinAgents } from '../plugins/agents/builtin/index.js';
 
 /**
  * Current config version. Bump this when making breaking changes
  * that require migration.
+ *
+ * Version history:
+ * - 2.0: Initial versioned config (skills in ~/.claude/skills/)
+ * - 2.1: Multi-agent skill installation (skills for all detected agents)
  */
-export const CURRENT_CONFIG_VERSION = '2.0';
+export const CURRENT_CONFIG_VERSION = '2.1';
 
 /**
  * Result of a migration attempt.
@@ -142,23 +152,65 @@ export async function migrateConfig(
     log('');
     log('📦 Upgrading ralph-tui configuration...');
 
-    // 1. Install/update bundled skills
-    log('   Installing bundled skills...');
-    const skills = await listBundledSkills();
+    // 1. Install/update bundled skills for all detected agents
+    log('   Installing bundled skills for detected agents...');
 
-    for (const skill of skills) {
-      const installResult = await installSkill(skill.name, {
-        force: options.forceSkills ?? true, // Default to updating skills
-      });
+    // Register built-in agents and get those with skill support
+    registerBuiltinAgents();
+    const registry = getAgentRegistry();
+    const plugins = registry.getRegisteredPlugins();
 
-      if (installResult.success && !installResult.skipped) {
-        result.skillsUpdated.push(skill.name);
-        log(`   ✓ Installed skill: ${skill.name}`);
-      } else if (installResult.skipped) {
-        log(`   · Skill already installed: ${skill.name}`);
-      } else if (installResult.error) {
-        result.warnings.push(`Failed to install skill ${skill.name}: ${installResult.error}`);
+    // Get agents that support skills and are available
+    for (const meta of plugins) {
+      if (!meta.skillsPaths) continue;
+
+      // Check if agent is installed
+      const instance = registry.createInstance(meta.id);
+      if (!instance) continue;
+
+      let available = false;
+      try {
+        const detectResult = await instance.detect();
+        available = detectResult.available;
+      } catch {
+        available = false;
+      } finally {
+        await instance.dispose();
       }
+
+      if (!available) {
+        log(`   · Skipping ${meta.name} (not installed)`);
+        continue;
+      }
+
+      // Install skills for this agent
+      log(`   Installing skills for ${meta.name}...`);
+      const agentResult = await installSkillsForAgent(
+        meta.id,
+        meta.name,
+        meta.skillsPaths,
+        {
+          force: options.forceSkills ?? true,
+          personal: true,
+          repo: false,
+        }
+      );
+
+      const skillPath = resolveSkillsPath(meta.skillsPaths.personal);
+      for (const [skillName, targetResults] of agentResult.skills) {
+        // Migration only installs to personal, so we check the first (and only) target result
+        for (const { result: skillResult } of targetResults) {
+          if (skillResult.success && !skillResult.skipped) {
+            result.skillsUpdated.push(`${meta.id}:${skillName}`);
+            log(`     ✓ ${skillName}`);
+          } else if (skillResult.skipped) {
+            log(`     · ${skillName} (already installed)`);
+          } else if (skillResult.error) {
+            result.warnings.push(`Failed to install ${skillName} for ${meta.name}: ${skillResult.error}`);
+          }
+        }
+      }
+      log(`     → ${skillPath}`);
     }
 
     // 2. Install builtin templates to global config directory

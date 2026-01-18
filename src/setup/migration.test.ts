@@ -240,8 +240,8 @@ describe('CURRENT_CONFIG_VERSION', () => {
     expect(CURRENT_CONFIG_VERSION).toMatch(/^\d+\.\d+$/);
   });
 
-  test('is 2.0 for this release', () => {
-    expect(CURRENT_CONFIG_VERSION).toBe('2.0');
+  test('is 2.1 for this release (multi-agent skills)', () => {
+    expect(CURRENT_CONFIG_VERSION).toBe('2.1');
   });
 });
 

@@ -32,6 +32,10 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     supportsFileContext: false,
     supportsSubagentTracing: true,
     structuredOutputFormat: 'jsonl',
+    skillsPaths: {
+      personal: '~/.factory/skills',
+      repo: '.factory/skills',
+    },
   };
 
   private model?: string;

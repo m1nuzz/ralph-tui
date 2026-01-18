@@ -237,6 +237,26 @@ export interface AgentSandboxRequirements {
 }
 
 /**
+ * Paths where an agent stores skills/plugins.
+ * Each agent has its own conventions for where skills are installed.
+ */
+export interface AgentSkillsPaths {
+  /**
+   * Personal/global skills directory (e.g., ~/.claude/skills/).
+   * Skills installed here are available across all projects.
+   * Path may use ~ for home directory.
+   */
+  personal: string;
+
+  /**
+   * Repository-local skills directory (e.g., .claude/skills/).
+   * Relative path from project root.
+   * Skills installed here are only available in the specific project.
+   */
+  repo: string;
+}
+
+/**
  * Metadata about an agent plugin.
  */
 export interface AgentPluginMeta {
@@ -272,6 +292,12 @@ export interface AgentPluginMeta {
 
   /** Format of structured output when supportsSubagentTracing is true */
   structuredOutputFormat?: 'json' | 'jsonl';
+
+  /**
+   * Paths where this agent stores skills.
+   * If undefined, the agent does not support skill installation.
+   */
+  skillsPaths?: AgentSkillsPaths;
 }
 
 /**

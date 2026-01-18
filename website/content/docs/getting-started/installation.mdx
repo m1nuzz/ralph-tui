@@ -166,26 +166,39 @@ ralph-tui config show
 
 ## Managing Skills
 
-Ralph TUI includes bundled skills for PRD creation and task conversion that integrate with your AI agent. These are installed automatically during setup, but you can manage them manually:
+Ralph TUI includes bundled skills for PRD creation and task conversion. Skills are installed automatically to **all detected agents** during setup and upgrades.
+
+### Supported Agents
+
+| Agent | Skills Location |
+|-------|-----------------|
+| Claude Code | `~/.claude/skills/` |
+| OpenCode | `~/.opencode/skill/` |
+| Factory Droid | `~/.factory/skills/` |
+
+### Manual Management
 
 ```bash
-# List bundled skills and their installation status
+# List bundled skills and installation status per agent
 ralph-tui skills list
 
-# Install/reinstall all skills
+# Install skills to all detected agents
 ralph-tui skills install
 
 # Force reinstall (overwrite existing)
 ralph-tui skills install --force
 
+# Install to a specific agent only
+ralph-tui skills install --agent claude
+ralph-tui skills install --agent opencode
+ralph-tui skills install --agent droid
+
 # Install a specific skill
 ralph-tui skills install ralph-tui-prd
 ```
 
-Skills are installed to your agent's skills directory (e.g., `~/.claude/skills/` for Claude Code) and become available automatically.
-
 <Callout type="tip">
-Use `ralph-tui skills install --force` after upgrading ralph-tui to ensure you have the latest skill versions.
+Skills are installed automatically when you upgrade ralph-tui. The migration runs on first use after upgrade and installs skills to all your detected agents.
 </Callout>
 
 ## Troubleshooting

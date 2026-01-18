@@ -127,6 +127,10 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     supportsInterrupt: true,
     supportsFileContext: true,
     supportsSubagentTracing: false,
+    skillsPaths: {
+      personal: '~/.opencode/skill',
+      repo: '.opencode/skill',
+    },
   };
 
   /** AI provider (any string, validated by OpenCode CLI) */

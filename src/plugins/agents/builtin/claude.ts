@@ -79,6 +79,10 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
     supportsFileContext: true,
     supportsSubagentTracing: true,
     structuredOutputFormat: 'jsonl',
+    skillsPaths: {
+      personal: '~/.claude/skills',
+      repo: '.claude/skills',
+    },
   };
 
   /** Print mode: text, json, or stream-json */
