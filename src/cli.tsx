@@ -19,6 +19,7 @@ import {
   executeConvertCommand,
   executeDocsCommand,
   executeDoctorCommand,
+  executeInfoCommand,
 } from './commands/index.js';
 
 /**
@@ -46,6 +47,7 @@ Commands:
   plugins agents      List available agent plugins
   plugins trackers    List available tracker plugins
   docs [section]      Open documentation in browser
+  info [options]      Display system information for bug reports
   help, --help, -h    Show this help message
   version, --version, -v  Show version number
 
@@ -107,6 +109,8 @@ Examples:
   ralph-tui doctor --json                # JSON output for scripts
   ralph-tui docs                         # Open documentation in browser
   ralph-tui docs quickstart              # Open quick start guide
+  ralph-tui info                         # Display system info for bug reports
+  ralph-tui info -c                      # Copyable format for GitHub issues
 `);
 }
 
@@ -200,6 +204,12 @@ async function handleSubcommand(args: string[]): Promise<boolean> {
   // Doctor command
   if (command === 'doctor') {
     await executeDoctorCommand(args.slice(1));
+    return true;
+  }
+
+  // Info command
+  if (command === 'info') {
+    await executeInfoCommand(args.slice(1));
     return true;
   }
 

@@ -73,3 +73,10 @@ export {
   executeDoctorCommand,
   printDoctorHelp,
 } from './doctor.js';
+
+export {
+  executeInfoCommand,
+  collectSystemInfo,
+  formatSystemInfo,
+  formatForBugReport,
+} from './info.js';
