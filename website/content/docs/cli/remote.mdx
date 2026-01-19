@@ -30,13 +30,13 @@ ralph-tui remote add <alias> <host:port> --token <token>
 
 ```bash
 # Add a remote server with explicit port
-ralph-tui remote add prod server.example.com:7890 --token rtui_abc123...
+ralph-tui remote add prod server.example.com:7890 --token OGQwNTcxMjM0NTY3...
 
 # Add with default port (7890)
-ralph-tui remote add staging staging.local --token rtui_xyz789...
+ralph-tui remote add staging staging.local --token YWJjZGVmMDEyMzQ1...
 
 # Add localhost for testing
-ralph-tui remote add local localhost --token rtui_test...
+ralph-tui remote add local localhost --token dGVzdDEyMzQ1Njc4...
 ```
 
 **Alias naming rules:**
@@ -69,13 +69,13 @@ Configured Remotes
   ✓ prod
     URL:    ws://server.example.com:7890
     Status: connected (45ms)
-    Token:  rtui_abc...
+    Token:  OGQwNTcx...
     Last:   1/19/2026, 3:30:00 PM
 
   ✗ staging
     URL:    ws://staging.local:7890
     Status: Connection timed out (5s)
-    Token:  rtui_xyz...
+    Token:  YWJjZGVm...
 
 ──────────────────────────────────────────────────────────────
 Total: 2 remote(s)
@@ -190,14 +190,14 @@ version = 1
 [remotes.prod]
 host = "server.example.com"
 port = 7890
-token = "rtui_abc123..."
+token = "OGQwNTcxMjM0NTY3ODkwYWJjZGVmMDEyMzQ1Njc4OQ"
 addedAt = "2026-01-19T00:00:00.000Z"
 lastConnected = "2026-01-19T15:30:00.000Z"
 
 [remotes.staging]
 host = "staging.local"
 port = 7890
-token = "rtui_xyz789..."
+token = "YWJjZGVmMDEyMzQ1Njc4OTBhYmNkZWYwMTIzNDU2Nzg5"
 addedAt = "2026-01-18T10:00:00.000Z"
 ```
 

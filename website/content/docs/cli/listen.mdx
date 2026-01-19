@@ -35,7 +35,7 @@ On first run, a secure authentication token is generated:
 
   A new server token has been generated:
 
-  rtui_a1b2c3d4-e5f6-7890-abcd-ef1234567890
+  OGQwNTcxMjM0NTY3ODkwYWJjZGVmMDEyMzQ1Njc4OQ
 
   ⚠️  IMPORTANT: This token is shown only once. Save it securely.
      You will need it to connect remote clients to this instance.
@@ -92,7 +92,7 @@ ralph-tui listen --rotate-token
 #
 #   New server token (save this securely):
 #
-#   rtui_new-token-here...
+#   YWJjZGVmMDEyMzQ1Njc4OTBhYmNkZWYwMTIzNDU2...
 #
 #   ⚠️  All existing connections using the old token will be rejected.
 ```
@@ -126,9 +126,9 @@ Ralph uses a two-tier token system for secure remote access:
 All remote actions are logged to `~/.config/ralph-tui/audit.log`:
 
 ```jsonl
-{"timestamp":"2026-01-19T15:30:00.000Z","clientId":"client-abc12345@192.168.1.100","action":"connect","success":true}
-{"timestamp":"2026-01-19T15:30:05.000Z","clientId":"client-abc12345@192.168.1.100","action":"pause","success":true}
-{"timestamp":"2026-01-19T15:31:00.000Z","clientId":"client-abc12345@192.168.1.100","action":"push_config","success":true,"details":{"scope":"global"}}
+{"timestamp":"2026-01-19T15:30:00.000Z","clientId":"abc12345@192.168.1.100","action":"connection_connect","success":true}
+{"timestamp":"2026-01-19T15:30:05.000Z","clientId":"abc12345@192.168.1.100","action":"pause","success":true}
+{"timestamp":"2026-01-19T15:31:00.000Z","clientId":"abc12345@192.168.1.100","action":"push_config","success":true,"details":{"scope":"global"}}
 ```
 
 ## Configuration Files

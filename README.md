@@ -205,7 +205,7 @@ ralph-tui run --listen --prd ./prd.json
 # ═══════════════════════════════════════════════════════════════
 #   Port: 7890
 #   New server token generated:
-#   rtui_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#   OGQwNTcxMjM0NTY3ODkwYWJjZGVmMDEyMzQ1Njc4OQ
 #   ⚠️  Save this token securely - it won't be shown again!
 # ═══════════════════════════════════════════════════════════════
 ```
@@ -213,7 +213,7 @@ ralph-tui run --listen --prd ./prd.json
 **On your local machine (client):**
 ```bash
 # Add the remote server
-ralph-tui remote add prod server.example.com:7890 --token rtui_xxx...
+ralph-tui remote add prod server.example.com:7890 --token OGQwNTcxMjM0NTY3...
 
 # Test the connection
 ralph-tui remote test prod
