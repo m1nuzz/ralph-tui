@@ -56,13 +56,27 @@ import { sendCompletionNotification, sendMaxIterationsNotification, sendErrorNot
 import type { NotificationSoundMode } from '../config/types.js';
 import { detectSandboxMode } from '../sandbox/index.js';
 import type { SandboxMode } from '../sandbox/index.js';
+import {
+  createRemoteServer,
+  getOrCreateServerToken,
+  getServerTokenInfo,
+  DEFAULT_LISTEN_OPTIONS,
+  InstanceManager,
+  type RemoteServer,
+  type InstanceTab,
+} from '../remote/index.js';
+import type { ConnectionToastMessage } from '../tui/components/Toast.js';
 
 /**
- * Extended runtime options with noSetup and verify flags
+ * Extended runtime options with noSetup, verify, and listen flags
  */
 interface ExtendedRuntimeOptions extends RuntimeOptions {
   noSetup?: boolean;
   verify?: boolean;
+  /** Enable remote listener (implies headless) */
+  listen?: boolean;
+  /** Port for remote listener (default: 7890) */
+  listenPort?: number;
 }
 
 /**
@@ -231,6 +245,21 @@ export function parseRunArgs(args: string[]): ExtendedRuntimeOptions {
       case '--verify':
         options.verify = true;
         break;
+
+      case '--listen':
+        options.listen = true;
+        options.headless = true; // Listen mode implies headless
+        break;
+
+      case '--listen-port':
+        if (nextArg && !nextArg.startsWith('-')) {
+          const parsed = parseInt(nextArg, 10);
+          if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
+            options.listenPort = parsed;
+          }
+          i++;
+        }
+        break;
     }
   }
 
@@ -272,6 +301,8 @@ Options:
   --sandbox=sandbox-exec  Force sandbox-exec (macOS)
   --no-sandbox        Disable sandboxing
   --no-network        Disable network access in sandbox
+  --listen            Enable remote listener (implies --headless)
+  --listen-port <n>   Port for remote listener (default: 7890)
 
 Log Output Format (--no-tui mode):
   [timestamp] [level] [component] message
@@ -294,6 +325,7 @@ Examples:
   ralph-tui run --iterations 20              # Limit to 20 iterations
   ralph-tui run --resume                     # Resume previous session
   ralph-tui run --no-tui                     # Run headless for CI/scripts
+  ralph-tui run --listen --prd ./prd.json    # Run with remote listener enabled
 `);
 }
 
@@ -635,6 +667,40 @@ function RunAppWrapper({
   const [tasks, setTasks] = useState<TrackerTask[]>(initialTasks ?? []);
   const [currentEpicId, setCurrentEpicId] = useState<string | undefined>(initialEpicId);
 
+  // Remote instance management
+  const [instanceManager] = useState(() => new InstanceManager());
+  const [instanceTabs, setInstanceTabs] = useState<InstanceTab[]>([]);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [connectionToast, setConnectionToast] = useState<ConnectionToastMessage | null>(null);
+
+  // Initialize instance manager on mount
+  useState(() => {
+    instanceManager.onStateChange((tabs, selectedIndex) => {
+      import('fs').then(fs => {
+        fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] onStateChange: selectedIndex=${selectedIndex}, tabs=${tabs.length}\n`);
+      });
+      setInstanceTabs(tabs);
+      setSelectedTabIndex(selectedIndex);
+    });
+    instanceManager.onToast((toast) => {
+      setConnectionToast(toast as ConnectionToastMessage);
+      // Auto-clear toast after 3 seconds
+      setTimeout(() => setConnectionToast(null), 3000);
+    });
+    instanceManager.initialize().then(() => {
+      setInstanceTabs(instanceManager.getTabs());
+      setSelectedTabIndex(instanceManager.getSelectedIndex());
+    });
+  });
+
+  // Handle tab selection
+  const handleSelectTab = async (index: number): Promise<void> => {
+    const fs = await import('fs');
+    fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] handleSelectTab called with index: ${index}\n`);
+    await instanceManager.selectTab(index);
+    fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] selectTab completed\n`);
+  };
+
   // Get available plugins from registries
   const agentRegistry = getAgentRegistry();
   const trackerRegistry = getTrackerRegistry();
@@ -758,6 +824,11 @@ function RunAppWrapper({
       currentModel={currentModel}
       sandboxConfig={sandboxConfig}
       resolvedSandboxMode={resolvedSandboxMode}
+      instanceTabs={instanceTabs}
+      selectedTabIndex={selectedTabIndex}
+      onSelectTab={handleSelectTab}
+      connectionToast={connectionToast}
+      instanceManager={instanceManager}
     />
   );
 }
@@ -1033,12 +1104,20 @@ async function runWithTui(
  * Log output format: [timestamp] [level] [component] message
  * This is designed for CI/scripts that need machine-parseable output.
  */
+interface HeadlessOptions {
+  notificationOptions?: NotificationRunOptions;
+  /** If true, keep process alive after engine completes (for remote listener) */
+  listenMode?: boolean;
+}
+
 async function runHeadless(
   engine: ExecutionEngine,
   persistedState: PersistedSessionState,
   config: RalphConfig,
-  notificationOptions?: NotificationRunOptions
+  headlessOptions?: HeadlessOptions
 ): Promise<PersistedSessionState> {
+  const notificationOptions = headlessOptions?.notificationOptions;
+  const listenMode = headlessOptions?.listenMode ?? false;
   let currentState = persistedState;
   let lastSigintTime = 0;
   const DOUBLE_PRESS_WINDOW_MS = 1000;
@@ -1281,6 +1360,18 @@ async function runHeadless(
 
   // Start the engine
   await engine.start();
+
+  // In listen mode, keep process alive for remote connections
+  if (listenMode) {
+    logger.info('system', 'Engine idle. Waiting for remote commands (Ctrl+C to stop)...');
+
+    // Keep process alive until signal received
+    await new Promise<void>((_resolve) => {
+      // The existing SIGINT/SIGTERM handlers will call process.exit()
+      // This promise just keeps the event loop alive indefinitely
+    });
+  }
+
   await engine.dispose();
 
   return currentState;
@@ -1550,6 +1641,63 @@ export async function executeRunCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  // Start remote listener if --listen flag is set
+  let remoteServer: RemoteServer | null = null;
+  if (options.listen) {
+    try {
+      const listenPort = options.listenPort ?? DEFAULT_LISTEN_OPTIONS.port;
+      const { token, isNew } = await getOrCreateServerToken();
+
+      // Create and start the remote server
+      remoteServer = await createRemoteServer({
+        port: listenPort,
+        engine,
+        tracker,
+        agentName: config.agent.plugin,
+        trackerName: config.tracker.plugin,
+        currentModel: config.model,
+      });
+      await remoteServer.start();
+
+      // Display connection info
+      console.log('');
+      console.log('═══════════════════════════════════════════════════════════════');
+      console.log('                    Remote Listener Enabled                     ');
+      console.log('═══════════════════════════════════════════════════════════════');
+      console.log('');
+      console.log(`  Port: ${listenPort}`);
+      if (isNew) {
+        console.log('');
+        console.log('  New server token generated:');
+        console.log(`  ${token.value}`);
+        console.log('');
+        console.log('  ⚠️  Save this token securely - it won\'t be shown again!');
+      } else {
+        // In listen mode, always show full token for easy copy/paste
+        console.log(`  Token: ${token.value}`);
+        const tokenInfo = await getServerTokenInfo();
+        if (tokenInfo.daysRemaining !== undefined && tokenInfo.daysRemaining <= 7) {
+          console.log(`  ⚠️  Token expires in ${tokenInfo.daysRemaining} day${tokenInfo.daysRemaining !== 1 ? 's' : ''}!`);
+        }
+      }
+      console.log('');
+      console.log('  Connect from another machine:');
+      console.log(`    ralph-tui remote add <alias> <this-host>:${listenPort} --token <token>`);
+      console.log('');
+      console.log('═══════════════════════════════════════════════════════════════');
+      console.log('');
+    } catch (error) {
+      console.error(
+        'Failed to start remote listener:',
+        error instanceof Error ? error.message : error
+      );
+      await endSession(config.cwd, 'failed');
+      await releaseLockNew(config.cwd);
+      cleanupLockHandlers();
+      process.exit(1);
+    }
+  }
+
   // Create persisted session state
   let persistedState = createPersistedSession({
     sessionId: session.id,
@@ -1585,7 +1733,10 @@ export async function executeRunCommand(args: string[]): Promise<void> {
       persistedState = await runWithTui(engine, persistedState, config, tasks, storedConfig, notificationRunOptions);
     } else {
       // Headless mode still auto-starts (for CI/automation)
-      persistedState = await runHeadless(engine, persistedState, config, notificationRunOptions);
+      persistedState = await runHeadless(engine, persistedState, config, {
+        notificationOptions: notificationRunOptions,
+        listenMode: options.listen,
+      });
     }
   } catch (error) {
     console.error(
@@ -1617,6 +1768,11 @@ export async function executeRunCommand(args: string[]): Promise<void> {
     // Save current state (session remains resumable)
     await savePersistedSession(persistedState);
     console.log('\nSession state saved. Use "ralph-tui resume" to continue.');
+  }
+
+  // Stop remote server if running
+  if (remoteServer) {
+    await remoteServer.stop();
   }
 
   // End session and clean up lock

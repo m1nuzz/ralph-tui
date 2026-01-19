@@ -17,9 +17,23 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Types for mock results
+interface MockDetectResult {
+  available: boolean;
+  version?: string;
+  executablePath?: string;
+  error?: string;
+}
+
+interface MockPreflightResult {
+  success: boolean;
+  durationMs?: number;
+  error?: string;
+}
+
 // Store mock implementations that can be changed per test
-let mockDetectResult = { available: true, version: '1.0.0', executablePath: '/usr/bin/mock' };
-let mockPreflightResult = { success: true, durationMs: 100 };
+let mockDetectResult: MockDetectResult = { available: true, version: '1.0.0', executablePath: '/usr/bin/mock' };
+let mockPreflightResult: MockPreflightResult = { success: true, durationMs: 100 };
 
 // Mock agent instance
 const createMockAgentInstance = () => ({
@@ -187,7 +201,7 @@ describe('doctor command', () => {
     });
 
     test('reports unhealthy when detection fails', async () => {
-      mockDetectResult = { available: false, error: 'CLI not found' } as any;
+      mockDetectResult = { available: false, error: 'CLI not found' };
 
       try {
         await executeDoctorCommand(['--json', '--cwd', tempDir]);
@@ -204,7 +218,7 @@ describe('doctor command', () => {
     });
 
     test('reports unhealthy when preflight fails', async () => {
-      mockPreflightResult = { success: false, error: 'No API key configured' } as any;
+      mockPreflightResult = { success: false, error: 'No API key configured' };
 
       try {
         await executeDoctorCommand(['--json', '--cwd', tempDir]);
@@ -270,7 +284,7 @@ describe('doctor command', () => {
     });
 
     test('exits with code 1 for unhealthy agent', async () => {
-      mockDetectResult = { available: false, error: 'Not found' } as any;
+      mockDetectResult = { available: false, error: 'Not found' };
 
       try {
         await executeDoctorCommand(['--json', '--cwd', tempDir]);

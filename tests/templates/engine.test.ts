@@ -349,6 +349,46 @@ describe('Template Engine - Variables and Context', () => {
       expect(vars.acceptanceCriteria).toContain('Second criterion');
     });
 
+    test('strips AC from taskDescription when extracted from description (avoids duplication)', () => {
+      // This simulates a beads-style task where AC is embedded in description
+      const task = createMockTask({
+        description: `Start Remote Listener
+
+## Acceptance Criteria
+- [ ] First item
+- [ ] Second item
+`,
+      });
+      const config = createMockConfig();
+      const vars = buildTemplateVariables(task, config);
+
+      // AC should be extracted
+      expect(vars.acceptanceCriteria).toContain('First item');
+      expect(vars.acceptanceCriteria).toContain('Second item');
+
+      // Description should NOT contain the AC section anymore
+      expect(vars.taskDescription).toBe('Start Remote Listener');
+      expect(vars.taskDescription).not.toContain('Acceptance Criteria');
+    });
+
+    test('keeps taskDescription intact when AC comes from metadata', () => {
+      // This simulates a JSON tracker task with AC in metadata
+      const task = createMockTask({
+        description: 'Full description with no embedded AC section',
+        metadata: {
+          acceptanceCriteria: ['Criterion 1', 'Criterion 2'],
+        },
+      });
+      const config = createMockConfig();
+      const vars = buildTemplateVariables(task, config);
+
+      // AC should come from metadata
+      expect(vars.acceptanceCriteria).toContain('Criterion 1');
+
+      // Description should be unchanged
+      expect(vars.taskDescription).toBe('Full description with no embedded AC section');
+    });
+
     test('extracts acceptance criteria from checklist items in description', () => {
       const task = createMockTask({
         description: `Task description with checklist:

@@ -38,6 +38,11 @@ export type ToastHandler = (toast: ConnectionToast) => void;
 export type InstanceStateChangeHandler = (tabs: InstanceTab[], selectedIndex: number) => void;
 
 /**
+ * Callback for remote engine events
+ */
+export type EngineEventHandler = (event: import('../engine/types.js').EngineEvent) => void;
+
+/**
  * Manages local and remote ralph-tui instances.
  * Handles tab state, connection management, and instance selection.
  * US-5: Tracks connection metrics and emits toast notifications for reconnection events.
@@ -49,6 +54,7 @@ export class InstanceManager {
   private stateChangeHandler: InstanceStateChangeHandler | null = null;
   private remoteConfigs: Map<string, RemoteServerConfig> = new Map();
   private toastHandler: ToastHandler | null = null;
+  private engineEventHandlers: Set<EngineEventHandler> = new Set();
 
   /**
    * Initialize the instance manager.
@@ -320,6 +326,16 @@ export class InstanceManager {
       case 'metrics_updated':
         this.updateTabMetrics(tab.id, event.metrics);
         break;
+
+      case 'engine_event':
+        // Forward engine events to subscribers (only if this is the selected tab)
+        import('fs').then(fs => {
+          fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] engine_event received: type=${event.event.type}, tabAlias=${tab.alias}, selectedAlias=${this.tabs[this.selectedIndex]?.alias}, forwarding=${tab.alias === this.tabs[this.selectedIndex]?.alias}\n`);
+        });
+        if (tab.alias === this.tabs[this.selectedIndex]?.alias) {
+          this.emitEngineEvent(event.event);
+        }
+        break;
     }
   }
 
@@ -353,6 +369,319 @@ export class InstanceManager {
     if (this.stateChangeHandler) {
       this.stateChangeHandler([...this.tabs], this.selectedIndex);
     }
+  }
+
+  /**
+   * Check if currently viewing a remote instance (not local).
+   */
+  isViewingRemote(): boolean {
+    return this.selectedIndex > 0;
+  }
+
+  /**
+   * Get the remote client for the selected tab (if remote and connected).
+   * Returns null if viewing local or not connected.
+   */
+  getSelectedClient(): RemoteClient | null {
+    const tab = this.tabs[this.selectedIndex];
+    if (!tab || tab.isLocal) {
+      return null;
+    }
+    const client = this.clients.get(tab.alias!);
+    return client && client.status === 'connected' ? client : null;
+  }
+
+  /**
+   * Get remote engine state for the selected tab.
+   * Returns null if viewing local, not connected, or fetch fails.
+   */
+  async getRemoteState(): Promise<import('./types.js').RemoteEngineState | null> {
+    const client = this.getSelectedClient();
+    if (!client) return null;
+
+    try {
+      return await client.getState();
+    } catch (error) {
+      // Debug: log the error
+      import('fs').then(fs => {
+        fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] getRemoteState ERROR: ${error}\n`);
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Get remote tasks for the selected tab.
+   * Returns null if viewing local, not connected, or fetch fails.
+   */
+  async getRemoteTasks(): Promise<import('../plugins/trackers/types.js').TrackerTask[] | null> {
+    const client = this.getSelectedClient();
+    if (!client) return null;
+
+    try {
+      return await client.getTasks();
+    } catch (error) {
+      // Debug: log the error
+      import('fs').then(fs => {
+        fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] getRemoteTasks ERROR: ${error}\n`);
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Subscribe to remote engine events.
+   * Events are forwarded from the connected remote client.
+   * Returns unsubscribe function.
+   */
+  onEngineEvent(handler: EngineEventHandler): () => void {
+    this.engineEventHandlers.add(handler);
+    return () => {
+      this.engineEventHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * Forward engine event to all subscribers.
+   */
+  private emitEngineEvent(event: import('../engine/types.js').EngineEvent): void {
+    for (const handler of this.engineEventHandlers) {
+      handler(event);
+    }
+  }
+
+  /**
+   * Subscribe the currently selected remote to engine events.
+   * Call this when switching to a remote tab.
+   */
+  async subscribeToSelectedRemote(): Promise<boolean> {
+    const client = this.getSelectedClient();
+    import('fs').then(fs => {
+      fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] subscribeToSelectedRemote: client=${client ? 'exists' : 'null'}\n`);
+    });
+    if (!client) return false;
+
+    try {
+      await client.subscribe();
+      import('fs').then(fs => {
+        fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] subscribeToSelectedRemote: success\n`);
+      });
+      return true;
+    } catch (error) {
+      import('fs').then(fs => {
+        fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] subscribeToSelectedRemote: failed - ${error}\n`);
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Unsubscribe from engine events on the selected remote.
+   */
+  async unsubscribeFromSelectedRemote(): Promise<void> {
+    const client = this.getSelectedClient();
+    if (client) {
+      try {
+        await client.unsubscribe();
+      } catch {
+        // Ignore errors on unsubscribe
+      }
+    }
+  }
+
+  /**
+   * Send a control command to the remote (if viewing remote).
+   * Returns true if command was sent, false if viewing local.
+   */
+  async sendRemoteCommand(
+    command: 'pause' | 'resume' | 'interrupt' | 'continue' | 'refreshTasks'
+  ): Promise<boolean> {
+    const tab = this.tabs[this.selectedIndex];
+    const clientFromMap = tab?.alias ? this.clients.get(tab.alias) : null;
+    const client = this.getSelectedClient();
+    // Debug logging
+    import('fs').then(fs => {
+      fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] sendRemoteCommand: ${command}, selectedIndex=${this.selectedIndex}, tabCount=${this.tabs.length}, tab=${tab ? JSON.stringify({ id: tab.id, label: tab.label, isLocal: tab.isLocal, status: tab.status, alias: tab.alias }) : 'null'}, clientFromMap=${clientFromMap ? 'exists' : 'null'}, clientFromMapStatus=${clientFromMap?.status ?? 'N/A'}, client=${client ? 'exists' : 'null'}\n`);
+    });
+    if (!client) return false;
+
+    try {
+      switch (command) {
+        case 'pause':
+          await client.pause();
+          break;
+        case 'resume':
+          await client.resume();
+          break;
+        case 'interrupt':
+          await client.interrupt();
+          break;
+        case 'continue':
+          await client.continueExecution();
+          break;
+        case 'refreshTasks':
+          await client.refreshTasks();
+          break;
+      }
+      return true;
+    } catch (error) {
+      // Debug logging
+      import('fs').then(fs => {
+        fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] sendRemoteCommand ERROR: ${error}\n`);
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Add iterations to the remote engine.
+   */
+  async addRemoteIterations(count: number): Promise<boolean> {
+    const client = this.getSelectedClient();
+    if (!client) return false;
+
+    try {
+      await client.addIterations(count);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Remove iterations from the remote engine.
+   */
+  async removeRemoteIterations(count: number): Promise<boolean> {
+    const client = this.getSelectedClient();
+    if (!client) return false;
+
+    try {
+      await client.removeIterations(count);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get prompt preview for a task on the remote instance.
+   * Returns null if viewing local, not connected, or fetch fails.
+   */
+  async getRemotePromptPreview(
+    taskId: string
+  ): Promise<{ success: true; prompt: string; source: string } | { success: false; error: string } | null> {
+    const client = this.getSelectedClient();
+    if (!client) return null;
+
+    try {
+      return await client.getPromptPreview(taskId);
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get prompt preview',
+      };
+    }
+  }
+
+  /**
+   * Get iteration output for a task on the remote instance.
+   * Returns null if viewing local, not connected, or fetch fails.
+   */
+  async getRemoteIterationOutput(taskId: string): Promise<{
+    success: boolean;
+    taskId: string;
+    iteration?: number;
+    output?: string;
+    startedAt?: string;
+    endedAt?: string;
+    durationMs?: number;
+    isRunning?: boolean;
+    error?: string;
+  } | null> {
+    const client = this.getSelectedClient();
+    if (!client) return null;
+
+    try {
+      return await client.getIterationOutput(taskId);
+    } catch (error) {
+      return {
+        success: false,
+        taskId,
+        error: error instanceof Error ? error.message : 'Failed to get iteration output',
+      };
+    }
+  }
+
+  // ============================================================================
+  // Config Push Methods
+  // ============================================================================
+
+  /**
+   * Check what configuration exists on the currently selected remote.
+   * Returns null if viewing local, not connected, or check fails.
+   */
+  async checkRemoteConfig(): Promise<{
+    globalExists: boolean;
+    projectExists: boolean;
+    globalPath?: string;
+    projectPath?: string;
+    globalContent?: string;
+    projectContent?: string;
+    remoteCwd?: string;
+  } | null> {
+    const client = this.getSelectedClient();
+    if (!client) return null;
+
+    try {
+      return await client.checkConfig();
+    } catch (error) {
+      // Debug: log the error
+      import('fs').then(fs => {
+        fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] checkRemoteConfig ERROR: ${error}\n`);
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Push configuration to the currently selected remote.
+   * Returns null if viewing local or not connected.
+   * @param scope - 'global' or 'project'
+   * @param configContent - TOML configuration content
+   * @param overwrite - If true, backup and overwrite existing config
+   */
+  async pushConfigToSelected(
+    scope: 'global' | 'project',
+    configContent: string,
+    overwrite = false
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    configPath?: string;
+    backupPath?: string;
+    migrationTriggered?: boolean;
+    requiresRestart?: boolean;
+  } | null> {
+    const client = this.getSelectedClient();
+    if (!client) return null;
+
+    try {
+      return await client.pushConfig(scope, configContent, overwrite);
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to push config',
+      };
+    }
+  }
+
+  /**
+   * Get a client for a specific remote alias.
+   * Returns null if not found or not connected.
+   */
+  getClientByAlias(alias: string): RemoteClient | null {
+    const client = this.clients.get(alias);
+    return client && client.status === 'connected' ? client : null;
   }
 }
 

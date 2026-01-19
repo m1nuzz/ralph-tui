@@ -73,6 +73,7 @@ Ralph selects the highest-priority task, builds a prompt, executes your AI agent
 - **Subagent Tracing**: See nested agent calls in real-time
 - **Cross-iteration Context**: Automatic progress tracking between tasks
 - **Flexible Skills**: Use PRD/task skills directly in your agent or via the TUI
+- **Remote Instances**: Monitor and control ralph-tui running on multiple machines from a single TUI
 
 ## CLI Commands
 
@@ -90,6 +91,8 @@ Ralph selects the highest-priority task, builds a prompt, executes your AI agent
 | `ralph-tui template show` | Display current prompt template |
 | `ralph-tui plugins agents` | List available agent plugins |
 | `ralph-tui plugins trackers` | List available tracker plugins |
+| `ralph-tui listen` | Start remote listener for remote control |
+| `ralph-tui remote <cmd>` | Manage remote server connections |
 
 ### Common Options
 
@@ -143,6 +146,8 @@ ralph-tui create-prd --output ./docs
 | `u` | Toggle subagent tracing |
 | `q` | Quit |
 | `?` | Show help |
+| `1-9` | Switch to tab 1-9 (remote instances) |
+| `[` / `]` | Previous/Next tab |
 
 See the [full CLI reference](https://ralph-tui.com/docs/cli/overview) for all options.
 
@@ -172,6 +177,184 @@ ralph-tui create-prd --prd-skill my-custom-skill
 ```
 
 Skills must be folders inside `skills_dir` containing a `SKILL.md` file.
+
+## Remote Instance Management
+
+Control multiple ralph-tui instances running on different machines (VPS servers, CI/CD environments, development boxes) from a single TUI.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  LOCAL [1]│ ● prod [2]│ ◐ staging [3]│ ○ dev [4]│      +       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   Your local TUI can connect to and control remote instances    │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Quick Start: Remote Control
+
+**On the remote machine (server):**
+```bash
+# Start ralph with remote listener enabled
+ralph-tui run --listen --prd ./prd.json
+
+# First run generates a secure token - save it!
+# ═══════════════════════════════════════════════════════════════
+#                    Remote Listener Enabled
+# ═══════════════════════════════════════════════════════════════
+#   Port: 7890
+#   New server token generated:
+#   rtui_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#   ⚠️  Save this token securely - it won't be shown again!
+# ═══════════════════════════════════════════════════════════════
+```
+
+**On your local machine (client):**
+```bash
+# Add the remote server
+ralph-tui remote add prod server.example.com:7890 --token rtui_xxx...
+
+# Test the connection
+ralph-tui remote test prod
+
+# Launch TUI - you'll see tabs for local + remote instances
+ralph-tui
+```
+
+### Remote Listener Commands
+
+**Recommended: Use `run --listen`** (runs engine with remote access):
+```bash
+# Start with remote listener on default port (7890)
+ralph-tui run --listen --prd ./prd.json
+
+# Start with custom port
+ralph-tui run --listen --listen-port 8080 --epic my-epic
+```
+
+**Token management** (use standalone `listen` command):
+```bash
+# Rotate authentication token (invalidates old token immediately)
+ralph-tui listen --rotate-token
+
+# View token info
+ralph-tui listen --help
+```
+
+### Remote Configuration Commands
+
+```bash
+# Add a remote server
+ralph-tui remote add <alias> <host:port> --token <token>
+
+# List all remotes with connection status
+ralph-tui remote list
+
+# Test connectivity to a specific remote
+ralph-tui remote test <alias>
+
+# Remove a remote
+ralph-tui remote remove <alias>
+
+# Push config to a remote (propagate your local settings)
+ralph-tui remote push-config <alias>
+ralph-tui remote push-config --all  # Push to all remotes
+```
+
+### Push Configuration to Remotes
+
+When managing multiple ralph-tui instances, you typically want them all to use the same configuration. The `push-config` command lets you propagate your local config to remote instances:
+
+```bash
+# Push config to a specific remote
+ralph-tui remote push-config prod
+
+# Preview what would be pushed (without applying)
+ralph-tui remote push-config prod --preview
+
+# Push to all configured remotes
+ralph-tui remote push-config --all
+
+# Force overwrite existing config without confirmation
+ralph-tui remote push-config prod --force
+
+# Push specific scope (global or project config)
+ralph-tui remote push-config prod --scope global
+ralph-tui remote push-config prod --scope project
+```
+
+**How it works:**
+1. Reads your local config (`~/.config/ralph-tui/config.toml` or `.ralph-tui/config.toml`)
+2. Connects to the remote instance
+3. Checks what config exists on the remote
+4. Creates a backup if overwriting (e.g., `config.toml.backup.2026-01-19T12-30-00-000Z`)
+5. Writes the new config
+6. Triggers auto-migration to install skills/templates
+
+**Scope selection:**
+- `--scope global`: Push to `~/.config/ralph-tui/config.toml` on remote
+- `--scope project`: Push to `.ralph-tui/config.toml` in remote's working directory
+- Without `--scope`: Auto-detects based on what exists locally and remotely
+
+### Security Model
+
+Ralph uses a two-tier token system for secure remote access:
+
+| Token Type | Lifetime | Purpose |
+|------------|----------|---------|
+| Server Token | 90 days | Initial authentication, stored on disk |
+| Connection Token | 24 hours | Session authentication, auto-refreshed |
+
+**Security features:**
+- Without a token configured, the listener binds only to localhost (127.0.0.1)
+- With a token configured, the listener binds to all interfaces (0.0.0.0)
+- All connections require authentication
+- All remote actions are logged to `~/.config/ralph-tui/audit.log`
+- Tokens are shown only once at generation time
+
+### Connection Resilience
+
+Remote connections automatically handle network interruptions:
+
+- **Auto-reconnect**: Exponential backoff from 1s to 30s (max 10 retries)
+- **Silent retries**: First 3 retries are silent, then toast notifications appear
+- **Status indicators**: `●` connected, `◐` connecting, `⟳` reconnecting, `○` disconnected
+- **Metrics display**: Latency (ms) and connection duration shown in tab bar
+
+### Tab Navigation
+
+When connected to remote instances, a tab bar appears at the top of the TUI:
+
+| Key | Action |
+|-----|--------|
+| `1-9` | Jump directly to tab 1-9 |
+| `[` | Previous tab |
+| `]` | Next tab |
+| `Ctrl+Tab` | Next tab |
+| `Ctrl+Shift+Tab` | Previous tab |
+
+The first tab is always "Local" (your current machine). Remote tabs show the alias you configured with connection status.
+
+### Full Remote Control
+
+When connected to a remote instance, you have full control:
+
+- **View**: Agent output, logs, progress, task list
+- **Control**: Pause, resume, cancel execution
+- **Modify**: Add/remove iterations, refresh tasks
+- **Start**: Begin new task execution
+
+All operations work identically to local control with <100ms perceived latency.
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `~/.config/ralph-tui/remote.json` | Server token storage |
+| `~/.config/ralph-tui/remotes.toml` | Remote server configurations |
+| `~/.config/ralph-tui/audit.log` | Audit log of all remote actions |
+| `~/.config/ralph-tui/listen.pid` | Daemon PID file |
 
 ## Contributing
 
@@ -213,7 +396,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md#testing) for detailed testing documentatio
 ralph-tui/
 ├── src/
 │   ├── cli.tsx           # CLI entry point
-│   ├── commands/         # CLI commands (run, resume, status, logs, etc.)
+│   ├── commands/         # CLI commands (run, resume, status, logs, listen, remote, etc.)
 │   ├── config/           # Configuration loading and validation (Zod schemas)
 │   ├── engine/           # Execution engine (iteration loop, events)
 │   ├── interruption/     # Signal handling and graceful shutdown
@@ -222,13 +405,20 @@ ralph-tui/
 │   │   ├── agents/       # Agent plugins (claude, opencode)
 │   │   │   └── tracing/  # Subagent tracing parser
 │   │   └── trackers/     # Tracker plugins (beads, beads-bv, json)
+│   ├── remote/           # Remote instance management
+│   │   ├── server.ts     # WebSocket server for remote control
+│   │   ├── client.ts     # WebSocket client with auto-reconnect
+│   │   ├── token.ts      # Two-tier token management
+│   │   ├── config.ts     # Remote server configuration (TOML)
+│   │   ├── audit.ts      # JSONL audit logging
+│   │   └── types.ts      # Type definitions
 │   ├── session/          # Session persistence and lock management
 │   ├── setup/            # Interactive setup wizard
 │   ├── templates/        # Handlebars prompt templates
 │   ├── chat/             # AI chat mode for PRD creation
 │   ├── prd/              # PRD generation and parsing
 │   └── tui/              # Terminal UI components (OpenTUI/React)
-│       └── components/   # React components
+│       └── components/   # React components (TabBar, Toast, etc.)
 ├── skills/               # Bundled skills for PRD/task creation
 │   ├── ralph-tui-prd/
 │   ├── ralph-tui-create-json/

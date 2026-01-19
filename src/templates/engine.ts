@@ -230,6 +230,22 @@ function extractAcceptanceCriteria(description: string | undefined): string {
 }
 
 /**
+ * Strip the Acceptance Criteria section from a description.
+ * Used to avoid duplication when AC is rendered separately in templates.
+ * @param description The full task description
+ * @returns Description with AC section removed
+ */
+function stripAcceptanceCriteria(description: string | undefined): string {
+  if (!description) return '';
+
+  // Remove explicit "## Acceptance Criteria" section
+  const stripped = description.replace(/##\s*Acceptance\s*Criteria[\s\S]*?(?=##|$)/i, '').trim();
+
+  // If we removed something and there's nothing left but a title, return that
+  return stripped || description;
+}
+
+/**
  * Get acceptance criteria from task metadata or extract from description.
  * JSON tracker stores criteria in metadata.acceptanceCriteria as an array.
  * Beads tracker embeds criteria in the description text.
@@ -315,11 +331,22 @@ export function buildTemplateVariables(
     }
   }
 
+  // Extract AC first - if we got it from description, strip it from taskDescription
+  const acceptanceCriteria = getAcceptanceCriteria(task);
+  const hasMetadataCriteria =
+    Array.isArray(task.metadata?.acceptanceCriteria) &&
+    task.metadata.acceptanceCriteria.length > 0;
+
+  // Only strip AC from description if it was embedded there (not from metadata)
+  const taskDescription = hasMetadataCriteria
+    ? (task.description ?? '')
+    : stripAcceptanceCriteria(task.description);
+
   return {
     taskId: task.id,
     taskTitle: task.title,
-    taskDescription: task.description ?? '',
-    acceptanceCriteria: getAcceptanceCriteria(task),
+    taskDescription,
+    acceptanceCriteria,
     epicId: epic?.id ?? task.parentId ?? '',
     epicTitle: epic?.title ?? '',
     trackerName: config.tracker?.plugin ?? 'unknown',

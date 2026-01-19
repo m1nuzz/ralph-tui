@@ -23,6 +23,8 @@ Use `ralph-tui help` to see all available commands, or `ralph-tui <command> --he
 | [`ralph-tui setup`](/docs/cli/setup) | Run interactive project setup |
 | [`ralph-tui create-prd`](/docs/cli/create-prd) | Create a new PRD interactively |
 | [`ralph-tui convert`](/docs/cli/convert) | Convert PRD markdown to JSON format |
+| [`ralph-tui listen`](/docs/cli/listen) | Start remote listener for remote control |
+| [`ralph-tui remote`](/docs/cli/remote) | Manage remote server connections |
 
 ## Additional Commands
 
@@ -88,6 +90,15 @@ The commands are typically used in this order:
 - **doctor** - Diagnose agent configuration and detect common issues
 - **info** - Display system information useful for bug reports (version, OS, agent status)
 
+### Remote Control
+
+- **[listen](/docs/cli/listen)** - Start a WebSocket server for remote control of this instance
+- **[remote](/docs/cli/remote)** - Manage connections to remote ralph-tui instances (add, remove, list, test, push-config)
+
+<Callout type="info">
+Remote control allows you to monitor and manage ralph-tui instances running on servers, CI/CD environments, or other machines from a single TUI. See [Remote Instance Management](#remote-instance-management) below for details.
+</Callout>
+
 ## Global Options
 
 These options work with most commands:
@@ -98,8 +109,47 @@ These options work with most commands:
 | `--version`, `-v` | Show Ralph TUI version |
 | `--cwd <path>` | Set working directory |
 
+## Remote Instance Management
+
+Control multiple ralph-tui instances running on different machines from a single TUI.
+
+### Quick Setup
+
+**On the remote machine (server):**
+```bash
+# Start ralph with remote listener enabled
+ralph-tui run --listen --prd ./prd.json
+
+# Save the generated token shown on first run
+```
+
+**On your local machine (client):**
+```bash
+# Add the remote server
+ralph-tui remote add prod server.example.com:7890 --token rtui_xxx...
+
+# Test the connection
+ralph-tui remote test prod
+
+# Launch TUI to see tabs for local + remote instances
+ralph-tui
+```
+
+### Key Features
+
+- **Tab-based navigation**: Switch between instances with number keys (1-9) or `[`/`]`
+- **Full control**: Pause, resume, cancel, add/remove iterations on any instance
+- **Config sync**: Push your local configuration to remotes with `ralph-tui remote push-config`
+- **Secure**: Two-tier token authentication with automatic refresh
+- **Resilient**: Auto-reconnect with exponential backoff
+
+For detailed documentation, see:
+- **[listen](/docs/cli/listen)** - Server-side remote control setup
+- **[remote](/docs/cli/remote)** - Client-side connection management
+
 ## Next Steps
 
 - **[run](/docs/cli/run)** - Learn about the main execution command
 - **[setup](/docs/cli/setup)** - Configure your project
 - **[create-prd](/docs/cli/create-prd)** - Create your first PRD
+- **[remote](/docs/cli/remote)** - Set up remote instance control

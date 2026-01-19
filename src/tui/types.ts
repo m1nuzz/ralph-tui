@@ -105,6 +105,12 @@ export interface HeaderProps {
   sandboxConfig?: SandboxConfig;
   /** Resolved sandbox mode (when mode is 'auto', this shows what it resolved to) */
   resolvedSandboxMode?: Exclude<SandboxMode, 'auto'>;
+  /** Remote instance info (when viewing a remote) */
+  remoteInfo?: {
+    name: string;
+    host: string;
+    port: number;
+  };
 }
 
 /**

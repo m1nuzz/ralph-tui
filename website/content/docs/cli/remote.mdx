@@ -1,0 +1,263 @@
+---
+title: remote
+description: Manage remote ralph-tui server connections for multi-instance control.
+---
+
+## Synopsis
+
+```bash
+ralph-tui remote <subcommand> [options]
+```
+
+The `remote` command manages connections to ralph-tui instances running on other machines. This enables monitoring and controlling multiple instances from a single TUI.
+
+## Subcommands
+
+### add
+
+Add a new remote server configuration.
+
+```bash
+ralph-tui remote add <alias> <host:port> --token <token>
+```
+
+**Arguments:**
+- `<alias>` - A unique name for this remote (e.g., `prod`, `staging`, `dev`)
+- `<host:port>` - Server hostname and port (port defaults to 7890 if omitted)
+- `--token <token>` - Authentication token from the remote server
+
+**Examples:**
+
+```bash
+# Add a remote server with explicit port
+ralph-tui remote add prod server.example.com:7890 --token rtui_abc123...
+
+# Add with default port (7890)
+ralph-tui remote add staging staging.local --token rtui_xyz789...
+
+# Add localhost for testing
+ralph-tui remote add local localhost --token rtui_test...
+```
+
+**Alias naming rules:**
+- Must start with a letter
+- Can contain letters, numbers, dashes, and underscores
+- Examples: `prod`, `staging-1`, `server_2`, `MyServer`
+
+### list / ls
+
+List all configured remotes with their connection status.
+
+```bash
+ralph-tui remote list
+ralph-tui remote ls  # Alias
+```
+
+**Output includes:**
+- Connection status (✓ connected, ✗ disconnected)
+- Server URL
+- Latency (when connected)
+- Token preview (first 8 characters)
+- Last successful connection time
+
+**Example output:**
+
+```
+Configured Remotes
+══════════════════════════════════════════════════════════════
+
+  ✓ prod
+    URL:    ws://server.example.com:7890
+    Status: connected (45ms)
+    Token:  rtui_abc...
+    Last:   1/19/2026, 3:30:00 PM
+
+  ✗ staging
+    URL:    ws://staging.local:7890
+    Status: Connection timed out (5s)
+    Token:  rtui_xyz...
+
+──────────────────────────────────────────────────────────────
+Total: 2 remote(s)
+```
+
+### remove / rm
+
+Remove a remote server configuration.
+
+```bash
+ralph-tui remote remove <alias>
+ralph-tui remote rm <alias>  # Alias
+```
+
+**Example:**
+
+```bash
+ralph-tui remote remove staging
+# Output: ✓ Remote 'staging' removed
+```
+
+### test
+
+Test connectivity to a remote server.
+
+```bash
+ralph-tui remote test <alias>
+```
+
+This command:
+1. Connects to the remote server
+2. Authenticates with the stored token
+3. Reports connection success/failure and latency
+4. Updates the "last connected" timestamp on success
+
+**Example:**
+
+```bash
+ralph-tui remote test prod
+# Output:
+# Testing connection to 'prod'...
+#   URL: ws://server.example.com:7890
+#
+# ✓ Connection successful
+#   Latency: 42ms
+```
+
+### push-config
+
+Push your local configuration to remote instances.
+
+```bash
+ralph-tui remote push-config <alias> [options]
+ralph-tui remote push-config --all [options]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--scope global\|project` | Which config to push (default: auto-detect) |
+| `--preview` | Show diff without applying changes |
+| `--force` | Overwrite existing config without confirmation |
+| `--all` | Push to all configured remotes |
+
+**Examples:**
+
+```bash
+# Push config to a specific remote
+ralph-tui remote push-config prod
+
+# Preview what would be pushed
+ralph-tui remote push-config prod --preview
+
+# Push to all remotes with force overwrite
+ralph-tui remote push-config --all --force
+
+# Push only global config
+ralph-tui remote push-config prod --scope global
+
+# Push only project config
+ralph-tui remote push-config prod --scope project
+```
+
+<Callout type="info">
+The push-config command automatically triggers migration on the remote, which installs skills and templates. Changes take effect on the next `ralph-tui run`.
+</Callout>
+
+**How it works:**
+
+1. **Detection**: Checks what config exists locally and on the remote
+2. **Scope selection**: Auto-detects or uses `--scope` flag
+3. **Backup**: Creates timestamped backup before overwriting (e.g., `config.toml.backup.2026-01-19T12-30-00-000Z`)
+4. **Transfer**: Pushes the TOML config content over WebSocket
+5. **Validation**: Server validates TOML syntax before writing
+6. **Migration**: Triggers auto-migration to install skills/templates
+
+**Scope selection logic (when `--scope` not specified):**
+- If you have project config and remote doesn't → push project
+- If you have global config → push global
+- If you only have project config → push project
+
+## Configuration Storage
+
+Remote configurations are stored in TOML format:
+
+**File:** `~/.config/ralph-tui/remotes.toml`
+
+```toml
+version = 1
+
+[remotes.prod]
+host = "server.example.com"
+port = 7890
+token = "rtui_abc123..."
+addedAt = "2026-01-19T00:00:00.000Z"
+lastConnected = "2026-01-19T15:30:00.000Z"
+
+[remotes.staging]
+host = "staging.local"
+port = 7890
+token = "rtui_xyz789..."
+addedAt = "2026-01-18T10:00:00.000Z"
+```
+
+## Security
+
+<Callout type="warning">
+Tokens are stored in plain text in `remotes.toml`. Ensure appropriate file permissions and do not commit this file to version control.
+</Callout>
+
+**Token handling:**
+- Tokens are shown in preview form (first 8 characters + `...`) in list output
+- Full tokens are only shown when generated on the server
+- All remote actions are logged to `~/.config/ralph-tui/audit.log`
+
+## Related Commands
+
+- [`listen`](/docs/cli/listen) - Start a remote listener on a server
+- [`run --listen`](/docs/cli/run) - Run with remote listener enabled
+
+## Troubleshooting
+
+### Connection Failed
+
+```
+✗ Connection failed
+  Error: Connection timed out (5s)
+```
+
+**Possible causes:**
+- Server is not running (`ralph-tui run --listen` or `ralph-tui listen`)
+- Firewall blocking port 7890
+- Incorrect hostname or port
+
+**Solution:** Verify the server is running and the port is accessible.
+
+### Authentication Failed
+
+```
+✗ Connection failed
+  Error: Invalid token
+```
+
+**Possible causes:**
+- Token was rotated on the server
+- Token was copied incorrectly
+
+**Solution:** Get a fresh token from the server with `ralph-tui listen --rotate-token` and update the remote configuration.
+
+### Config Push Failed
+
+```
+✗ Push failed: Config already exists at /path/to/config.toml. Use overwrite=true to replace.
+```
+
+**Solution:** Use `--force` flag to overwrite existing config, or `--preview` to see what would change first.
+
+### Invalid TOML
+
+```
+✗ Push failed: Invalid TOML: Expected "=" at line 5
+```
+
+**Solution:** Fix the syntax error in your local config file before pushing.

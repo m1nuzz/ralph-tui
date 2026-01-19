@@ -318,6 +318,12 @@ export interface RemoteEngineState {
   maxIterations: number;
   /** Tasks list (replaces tracker access) */
   tasks: TrackerTask[];
+  /** Agent plugin name (e.g., "claude", "opencode") */
+  agentName?: string;
+  /** Tracker plugin name (e.g., "beads", "json") */
+  trackerName?: string;
+  /** Current model being used (provider/model format) */
+  currentModel?: string;
 }
 
 /**
@@ -401,6 +407,138 @@ export interface OperationResultMessage extends WSMessage {
   data?: unknown;
 }
 
+// ============================================================================
+// Config Push Messages (for pushing configuration to remote instances)
+// ============================================================================
+
+/**
+ * Check what configuration exists on the remote before pushing.
+ * Used to determine scope options and enable preview/diff functionality.
+ */
+export interface CheckConfigMessage extends WSMessage {
+  type: 'check_config';
+}
+
+/**
+ * Response with information about existing configs on the remote.
+ */
+export interface CheckConfigResponseMessage extends WSMessage {
+  type: 'check_config_response';
+  /** Whether global config (~/.config/ralph-tui/config.toml) exists */
+  globalExists: boolean;
+  /** Whether project config (.ralph-tui/config.toml) exists */
+  projectExists: boolean;
+  /** Path to global config (if exists) */
+  globalPath?: string;
+  /** Path to project config (if exists) */
+  projectPath?: string;
+  /** Content of global config (for preview/diff, if exists) */
+  globalContent?: string;
+  /** Content of project config (for preview/diff, if exists) */
+  projectContent?: string;
+  /** Current working directory on the remote */
+  remoteCwd?: string;
+}
+
+/**
+ * Push configuration to the remote instance.
+ */
+export interface PushConfigMessage extends WSMessage {
+  type: 'push_config';
+  /** Scope: 'global' for ~/.config/ralph-tui, 'project' for .ralph-tui */
+  scope: 'global' | 'project';
+  /** The TOML configuration content to push */
+  configContent: string;
+  /** If false and config exists, return error. If true, create backup and overwrite. */
+  overwrite: boolean;
+}
+
+/**
+ * Response from pushing configuration.
+ */
+export interface PushConfigResponseMessage extends WSMessage {
+  type: 'push_config_response';
+  /** Whether the push succeeded */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+  /** Path to backup file (if existing config was backed up) */
+  backupPath?: string;
+  /** Whether auto-migration was triggered */
+  migrationTriggered?: boolean;
+  /** If engine is running and needs restart for changes to take effect */
+  requiresRestart?: boolean;
+  /** Path where config was written */
+  configPath?: string;
+}
+
+// ============================================================================
+// Prompt Preview Messages (for viewing prompt that would be sent to agent)
+// ============================================================================
+
+/**
+ * Request to generate a prompt preview for a task.
+ */
+export interface GetPromptPreviewMessage extends WSMessage {
+  type: 'get_prompt_preview';
+  /** Task ID to generate prompt for */
+  taskId: string;
+}
+
+/**
+ * Response with prompt preview content.
+ */
+export interface PromptPreviewResponseMessage extends WSMessage {
+  type: 'prompt_preview_response';
+  /** Whether the preview was generated successfully */
+  success: boolean;
+  /** The rendered prompt content */
+  prompt?: string;
+  /** Template source (e.g., 'tracker', 'default') */
+  source?: string;
+  /** Error message if failed */
+  error?: string;
+}
+
+// ============================================================================
+// Iteration Output Messages (for viewing historical iteration output)
+// ============================================================================
+
+/**
+ * Request to get iteration output for a specific task.
+ * Returns the most recent iteration result for the task.
+ */
+export interface GetIterationOutputMessage extends WSMessage {
+  type: 'get_iteration_output';
+  /** Task ID to get iteration output for */
+  taskId: string;
+}
+
+/**
+ * Response with iteration output data.
+ */
+export interface IterationOutputResponseMessage extends WSMessage {
+  type: 'iteration_output_response';
+  /** Whether the iteration was found */
+  success: boolean;
+  /** Task ID this output is for */
+  taskId: string;
+  /** Iteration number */
+  iteration?: number;
+  /** Agent stdout output */
+  output?: string;
+  /** When the iteration started (ISO 8601) */
+  startedAt?: string;
+  /** When the iteration ended (ISO 8601) */
+  endedAt?: string;
+  /** Duration in milliseconds */
+  durationMs?: number;
+  /** Whether the iteration is still running */
+  isRunning?: boolean;
+  /** Error message if not found or failed */
+  error?: string;
+}
+
 /**
  * All possible remote control message types (extending base types).
  */
@@ -420,4 +558,12 @@ export type RemoteWSMessageType =
   | AddIterationsMessage
   | RemoveIterationsMessage
   | ContinueMessage
-  | OperationResultMessage;
+  | OperationResultMessage
+  | GetPromptPreviewMessage
+  | PromptPreviewResponseMessage
+  | GetIterationOutputMessage
+  | IterationOutputResponseMessage
+  | CheckConfigMessage
+  | CheckConfigResponseMessage
+  | PushConfigMessage
+  | PushConfigResponseMessage;

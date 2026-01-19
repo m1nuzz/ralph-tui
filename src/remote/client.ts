@@ -28,6 +28,14 @@ import type {
   RemoteEngineState,
   TokenRefreshMessage,
   TokenRefreshResponseMessage,
+  GetPromptPreviewMessage,
+  PromptPreviewResponseMessage,
+  GetIterationOutputMessage,
+  IterationOutputResponseMessage,
+  CheckConfigMessage,
+  CheckConfigResponseMessage,
+  PushConfigMessage,
+  PushConfigResponseMessage,
 } from './types.js';
 import { TOKEN_LIFETIMES } from './types.js';
 import type { TrackerTask } from '../plugins/trackers/types.js';
@@ -620,6 +628,147 @@ export class RemoteClient {
       throw new Error(`Unexpected response type: ${response.type}`);
     }
     return (response as OperationResultMessage).success;
+  }
+
+  /**
+   * Get a prompt preview for a task on the remote instance.
+   * Returns the rendered prompt that would be sent to the agent.
+   */
+  async getPromptPreview(
+    taskId: string
+  ): Promise<{ success: true; prompt: string; source: string } | { success: false; error: string }> {
+    const message: Omit<GetPromptPreviewMessage, 'id' | 'timestamp'> = {
+      type: 'get_prompt_preview',
+      taskId,
+    };
+    const response = await this.request<GetPromptPreviewMessage>(message);
+    if (response.type !== 'prompt_preview_response') {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    const previewResponse = response as PromptPreviewResponseMessage;
+    if (previewResponse.success) {
+      return {
+        success: true,
+        prompt: previewResponse.prompt!,
+        source: previewResponse.source!,
+      };
+    }
+    return {
+      success: false,
+      error: previewResponse.error ?? 'Unknown error',
+    };
+  }
+
+  /**
+   * Get iteration output for a specific task on the remote instance.
+   * Returns the output from the most recent iteration of the task.
+   */
+  async getIterationOutput(taskId: string): Promise<{
+    success: boolean;
+    taskId: string;
+    iteration?: number;
+    output?: string;
+    startedAt?: string;
+    endedAt?: string;
+    durationMs?: number;
+    isRunning?: boolean;
+    error?: string;
+  }> {
+    const message: Omit<GetIterationOutputMessage, 'id' | 'timestamp'> = {
+      type: 'get_iteration_output',
+      taskId,
+    };
+    const response = await this.request<GetIterationOutputMessage>(message);
+    if (response.type !== 'iteration_output_response') {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    const outputResponse = response as IterationOutputResponseMessage;
+    return {
+      success: outputResponse.success,
+      taskId: outputResponse.taskId,
+      iteration: outputResponse.iteration,
+      output: outputResponse.output,
+      startedAt: outputResponse.startedAt,
+      endedAt: outputResponse.endedAt,
+      durationMs: outputResponse.durationMs,
+      isRunning: outputResponse.isRunning,
+      error: outputResponse.error,
+    };
+  }
+
+  // ============================================================================
+  // Config Push Methods
+  // ============================================================================
+
+  /**
+   * Check what configuration exists on the remote instance.
+   * Returns info about global and project config existence and content (for preview/diff).
+   */
+  async checkConfig(): Promise<{
+    globalExists: boolean;
+    projectExists: boolean;
+    globalPath?: string;
+    projectPath?: string;
+    globalContent?: string;
+    projectContent?: string;
+    remoteCwd?: string;
+  }> {
+    const message: Omit<CheckConfigMessage, 'id' | 'timestamp'> = {
+      type: 'check_config',
+    };
+    const response = await this.request<CheckConfigMessage>(message);
+    if (response.type !== 'check_config_response') {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    const configResponse = response as CheckConfigResponseMessage;
+    return {
+      globalExists: configResponse.globalExists,
+      projectExists: configResponse.projectExists,
+      globalPath: configResponse.globalPath,
+      projectPath: configResponse.projectPath,
+      globalContent: configResponse.globalContent,
+      projectContent: configResponse.projectContent,
+      remoteCwd: configResponse.remoteCwd,
+    };
+  }
+
+  /**
+   * Push configuration to the remote instance.
+   * @param scope - 'global' for ~/.config/ralph-tui or 'project' for .ralph-tui
+   * @param configContent - TOML configuration content
+   * @param overwrite - If true, backup and overwrite existing config. If false, fail if exists.
+   */
+  async pushConfig(
+    scope: 'global' | 'project',
+    configContent: string,
+    overwrite = false
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    configPath?: string;
+    backupPath?: string;
+    migrationTriggered?: boolean;
+    requiresRestart?: boolean;
+  }> {
+    const message: Omit<PushConfigMessage, 'id' | 'timestamp'> = {
+      type: 'push_config',
+      scope,
+      configContent,
+      overwrite,
+    };
+    const response = await this.request<PushConfigMessage>(message);
+    if (response.type !== 'push_config_response') {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    const pushResponse = response as PushConfigResponseMessage;
+    return {
+      success: pushResponse.success,
+      error: pushResponse.error,
+      configPath: pushResponse.configPath,
+      backupPath: pushResponse.backupPath,
+      migrationTriggered: pushResponse.migrationTriggered,
+      requiresRestart: pushResponse.requiresRestart,
+    };
   }
 
   /**

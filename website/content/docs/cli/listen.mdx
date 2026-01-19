@@ -1,0 +1,217 @@
+---
+title: listen
+description: Start a remote listener for controlling ralph-tui from remote clients.
+---
+
+## Synopsis
+
+```bash
+ralph-tui listen [options]
+```
+
+The `listen` command starts a WebSocket server that allows remote clients to connect and control this ralph-tui instance. This is useful for monitoring and managing ralph-tui running on servers, CI/CD environments, or other machines.
+
+<Callout type="tip">
+For most use cases, prefer `ralph-tui run --listen` which starts both the execution engine and the remote listener together.
+</Callout>
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `--port <port>` | Port to bind to (default: 7890) |
+| `--daemon`, `-d` | Run as a background daemon |
+| `--rotate-token` | Generate a new token and invalidate the old one |
+| `-h`, `--help` | Show help message |
+
+## First Run: Token Generation
+
+On first run, a secure authentication token is generated:
+
+```
+═══════════════════════════════════════════════════════════════
+                   Server Authentication Token
+═══════════════════════════════════════════════════════════════
+
+  A new server token has been generated:
+
+  rtui_a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+  ⚠️  IMPORTANT: This token is shown only once. Save it securely.
+     You will need it to connect remote clients to this instance.
+
+  Token Details:
+    Version:  1
+    Created:  January 19, 2026
+    Expires:  April 19, 2026
+    Lifetime: 90 days
+
+  To rotate this token later, run:
+    ralph-tui listen --rotate-token
+
+═══════════════════════════════════════════════════════════════
+```
+
+**Save this token securely!** You'll need it to configure remote clients.
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Start listener on default port (7890)
+ralph-tui listen
+
+# Start on custom port
+ralph-tui listen --port 8080
+```
+
+### Daemon Mode
+
+```bash
+# Start as background daemon
+ralph-tui listen --daemon
+
+# Check if daemon is running
+ps -p $(cat ~/.config/ralph-tui/listen.pid) 2>/dev/null && echo "Running"
+
+# Stop daemon
+kill $(cat ~/.config/ralph-tui/listen.pid)
+```
+
+### Token Management
+
+```bash
+# Rotate token (invalidates all existing connections)
+ralph-tui listen --rotate-token
+
+# Output shows new token:
+# ═══════════════════════════════════════════════════════════════
+#                       Token Rotated Successfully
+# ═══════════════════════════════════════════════════════════════
+#
+#   New server token (save this securely):
+#
+#   rtui_new-token-here...
+#
+#   ⚠️  All existing connections using the old token will be rejected.
+```
+
+## Security Model
+
+### Two-Tier Token System
+
+Ralph uses a two-tier token system for secure remote access:
+
+| Token Type | Lifetime | Purpose |
+|------------|----------|---------|
+| **Server Token** | 90 days | Initial authentication, stored on disk |
+| **Connection Token** | 24 hours | Session authentication, auto-refreshed |
+
+**How it works:**
+1. Client connects with server token (long-lived, from `--token` flag)
+2. Server issues connection token (short-lived, auto-refreshed)
+3. Connection token is used for ongoing session
+4. If connection token expires, client automatically re-authenticates with server token
+
+### Host Binding
+
+| Configuration | Binding | Access |
+|---------------|---------|--------|
+| No token configured | `127.0.0.1` (localhost only) | Local only |
+| Token configured | `0.0.0.0` (all interfaces) | Network accessible |
+
+### Audit Logging
+
+All remote actions are logged to `~/.config/ralph-tui/audit.log`:
+
+```jsonl
+{"timestamp":"2026-01-19T15:30:00.000Z","clientId":"client-abc12345@192.168.1.100","action":"connect","success":true}
+{"timestamp":"2026-01-19T15:30:05.000Z","clientId":"client-abc12345@192.168.1.100","action":"pause","success":true}
+{"timestamp":"2026-01-19T15:31:00.000Z","clientId":"client-abc12345@192.168.1.100","action":"push_config","success":true,"details":{"scope":"global"}}
+```
+
+## Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `~/.config/ralph-tui/remote.json` | Server token storage |
+| `~/.config/ralph-tui/audit.log` | Audit log of all remote actions |
+| `~/.config/ralph-tui/listen.pid` | Daemon PID file |
+
+## Combining with run
+
+The recommended way to use remote control is with `ralph-tui run --listen`:
+
+```bash
+# Start execution with remote listener
+ralph-tui run --listen --prd ./prd.json
+
+# With custom port
+ralph-tui run --listen --listen-port 8080 --epic my-epic
+
+# With all options
+ralph-tui run --listen --listen-port 9000 --agent claude --iterations 10
+```
+
+This starts both the execution engine and the remote listener, allowing you to:
+- Monitor execution progress remotely
+- Pause/resume/cancel execution
+- View agent output in real-time
+- Add/remove iterations
+
+## Protocol
+
+The remote listener uses WebSocket with JSON messages. The protocol supports:
+
+### Connection Messages
+- `auth` / `auth_response` - Authentication
+- `ping` / `pong` - Heartbeat
+- `token_refresh` / `token_refresh_response` - Token refresh
+
+### State Messages
+- `get_state` / `state_response` - Get engine state
+- `get_tasks` / `tasks_response` - Get task list
+- `subscribe` / `unsubscribe` - Event subscription
+
+### Control Messages
+- `pause` / `resume` - Pause/resume execution
+- `interrupt` - Cancel current iteration
+- `add_iterations` / `remove_iterations` - Modify iteration count
+- `continue` - Continue after pause
+- `refresh_tasks` - Reload task list
+
+### Config Messages
+- `check_config` / `check_config_response` - Check remote config status
+- `push_config` / `push_config_response` - Push configuration
+
+## Related Commands
+
+- [`remote`](/docs/cli/remote) - Manage remote server connections
+- [`run`](/docs/cli/run) - Run with `--listen` flag for combined execution + remote control
+
+## Troubleshooting
+
+### Port Already in Use
+
+```
+Error: Failed to bind to port 7890: Address already in use
+```
+
+**Solution:** Use a different port with `--port` or stop the existing process.
+
+### Token Expiring Soon
+
+```
+⚠️  Token expires in 5 days!
+```
+
+**Solution:** Rotate the token with `--rotate-token` and update all remote client configurations.
+
+### Daemon Not Starting
+
+```
+Error: Failed to fork daemon
+```
+
+**Solution:** Check file permissions for `~/.config/ralph-tui/` directory.

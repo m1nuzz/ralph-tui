@@ -15,6 +15,9 @@ const RATE_LIMIT_ICON = '⏳';
 /** Sandbox indicator icon */
 const SANDBOX_ICON = '🔒';
 
+/** Remote indicator icon */
+const REMOTE_ICON = '🌐';
+
 /**
  * Truncate text to fit within a given width, adding ellipsis if needed
  */
@@ -175,6 +178,7 @@ export function Header({
   maxIterations,
   currentModel,
   sandboxConfig,
+  remoteInfo,
 }: HeaderProps): ReactNode {
   const statusDisplay = getStatusDisplay(status);
   const formattedTime = formatElapsedTime(elapsedTime);
@@ -227,8 +231,15 @@ export function Header({
           paddingRight: 1,
         }}
       >
-        {/* Left section: Status indicator + label + optional current task */}
+        {/* Left section: Remote indicator (if viewing remote) + Status indicator + label + optional current task */}
         <box style={{ flexDirection: 'row', gap: 1, flexShrink: 1 }}>
+          {remoteInfo && (
+            <text>
+              <span fg={colors.accent.primary}>{REMOTE_ICON} {remoteInfo.name}</span>
+              <span fg={colors.fg.dim}> ({remoteInfo.host}:{remoteInfo.port})</span>
+              <span fg={colors.fg.dim}> │ </span>
+            </text>
+          )}
           <text>
             <span fg={statusDisplay.color}>{statusDisplay.indicator}</span>
             <span fg={statusDisplay.color}> {statusDisplay.label}</span>

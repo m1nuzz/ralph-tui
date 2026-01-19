@@ -22,6 +22,11 @@ interface RemoteCommandOptions {
   hostPort?: string;
   token?: string;
   help?: boolean;
+  // push-config options
+  scope?: 'global' | 'project';
+  preview?: boolean;
+  force?: boolean;
+  all?: boolean;
 }
 
 /**
@@ -52,6 +57,18 @@ export function parseRemoteArgs(args: string[]): RemoteCommandOptions {
     } else if (arg === '--token' && args[i + 1]) {
       options.token = args[i + 1];
       i++;
+    } else if (arg === '--scope' && args[i + 1]) {
+      const scopeValue = args[i + 1];
+      if (scopeValue === 'global' || scopeValue === 'project') {
+        options.scope = scopeValue;
+      }
+      i++;
+    } else if (arg === '--preview') {
+      options.preview = true;
+    } else if (arg === '--force') {
+      options.force = true;
+    } else if (arg === '--all') {
+      options.all = true;
     } else if (!arg.startsWith('-')) {
       // Positional arguments
       if (!options.alias) {
@@ -300,6 +317,238 @@ async function executeRemoteTest(options: RemoteCommandOptions): Promise<void> {
 }
 
 /**
+ * Execute the 'remote push-config' subcommand.
+ * Pushes local configuration to a remote instance.
+ */
+async function executeRemotePushConfig(options: RemoteCommandOptions): Promise<void> {
+  const { homedir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { readFile, access, constants } = await import('node:fs/promises');
+  const { RemoteClient } = await import('../remote/client.js');
+  const readline = await import('node:readline');
+
+  // Helper to prompt user
+  const prompt = (question: string): Promise<string> => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    return new Promise((resolve) => {
+      rl.question(question, (answer) => {
+        rl.close();
+        resolve(answer);
+      });
+    });
+  };
+
+  // Get list of remotes to push to
+  const remotes = await listRemotes();
+  if (remotes.length === 0) {
+    console.error('');
+    console.error('No remotes configured.');
+    console.error('');
+    console.error('Add a remote with:');
+    console.error('  ralph-tui remote add <alias> <host:port> --token <token>');
+    console.error('');
+    process.exit(1);
+  }
+
+  // Determine which remotes to push to
+  let targetRemotes: [string, typeof remotes[0][1]][] = [];
+  if (options.all) {
+    targetRemotes = remotes;
+  } else if (options.alias) {
+    const remote = await getRemote(options.alias);
+    if (!remote) {
+      console.error(`Error: Remote '${options.alias}' not found`);
+      console.error('');
+      console.error('Available remotes:');
+      for (const [alias] of remotes) {
+        console.error(`  - ${alias}`);
+      }
+      process.exit(1);
+    }
+    targetRemotes = [[options.alias, remote]];
+  } else {
+    console.error('Usage: ralph-tui remote push-config <alias> [options]');
+    console.error('       ralph-tui remote push-config --all [options]');
+    console.error('');
+    console.error('Specify an alias or use --all to push to all remotes.');
+    process.exit(1);
+  }
+
+  // Load local config
+  const globalConfigPath = join(homedir(), '.config', 'ralph-tui', 'config.toml');
+  const projectConfigPath = join(process.cwd(), '.ralph-tui', 'config.toml');
+
+  let globalContent: string | null = null;
+  let projectContent: string | null = null;
+
+  try {
+    await access(globalConfigPath, constants.R_OK);
+    globalContent = await readFile(globalConfigPath, 'utf-8');
+  } catch {
+    // No global config
+  }
+
+  try {
+    await access(projectConfigPath, constants.R_OK);
+    projectContent = await readFile(projectConfigPath, 'utf-8');
+  } catch {
+    // No project config
+  }
+
+  if (!globalContent && !projectContent) {
+    console.error('');
+    console.error('No local configuration found to push.');
+    console.error('');
+    console.error('Expected config at:');
+    console.error(`  Global: ${globalConfigPath}`);
+    console.error(`  Project: ${projectConfigPath}`);
+    console.error('');
+    console.error('Run "ralph-tui setup" to create a configuration.');
+    process.exit(1);
+  }
+
+  console.log('');
+  console.log('📤 Push Configuration to Remote');
+  console.log('════════════════════════════════════════════════════════════════');
+
+  // Process each remote
+  for (const [alias, remote] of targetRemotes) {
+    console.log('');
+    console.log(`Remote: ${alias} (${remote.host}:${remote.port})`);
+    console.log('──────────────────────────────────────────────────────────────────');
+
+    // Connect to remote
+    let client: InstanceType<typeof RemoteClient>;
+    try {
+      client = new RemoteClient(remote.host, remote.port, remote.token, () => {});
+      await client.connect();
+    } catch (error) {
+      console.error(`  ✗ Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      continue;
+    }
+
+    // Check what config exists on remote
+    let remoteConfig: Awaited<ReturnType<typeof client.checkConfig>>;
+    try {
+      remoteConfig = await client.checkConfig();
+    } catch (error) {
+      console.error(`  ✗ Failed to check remote config: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      client.disconnect();
+      continue;
+    }
+
+    console.log('  Remote config status:');
+    console.log(`    Global:  ${remoteConfig.globalExists ? '✓ exists' : '○ not found'}`);
+    console.log(`    Project: ${remoteConfig.projectExists ? '✓ exists' : '○ not found'}`);
+    if (remoteConfig.remoteCwd) {
+      console.log(`    Remote CWD: ${remoteConfig.remoteCwd}`);
+    }
+
+    // Determine scope
+    let scope: 'global' | 'project' = options.scope ?? 'global';
+    if (!options.scope) {
+      // Auto-detect: prefer project if we have project config and remote doesn't have one
+      if (projectContent && !remoteConfig.projectExists) {
+        scope = 'project';
+      } else if (globalContent) {
+        scope = 'global';
+      } else if (projectContent) {
+        scope = 'project';
+      }
+      console.log(`  Auto-selected scope: ${scope}`);
+    }
+
+    const configContent = scope === 'global' ? globalContent : projectContent;
+    if (!configContent) {
+      console.error(`  ✗ No local ${scope} config to push`);
+      client.disconnect();
+      continue;
+    }
+
+    // Preview mode: show diff
+    if (options.preview) {
+      console.log('');
+      console.log(`  Preview (${scope} config):`);
+      console.log('  ───────────────────────────────────────────────────────────');
+
+      const remoteContent = scope === 'global' ? remoteConfig.globalContent : remoteConfig.projectContent;
+      if (remoteContent) {
+        console.log('  Remote (existing):');
+        for (const line of remoteContent.split('\n').slice(0, 10)) {
+          console.log(`    ${line}`);
+        }
+        if (remoteContent.split('\n').length > 10) {
+          console.log('    ... (truncated)');
+        }
+        console.log('');
+      }
+      console.log('  Local (to push):');
+      for (const line of configContent.split('\n').slice(0, 10)) {
+        console.log(`    ${line}`);
+      }
+      if (configContent.split('\n').length > 10) {
+        console.log('    ... (truncated)');
+      }
+      console.log('');
+      client.disconnect();
+      continue;
+    }
+
+    // Check if overwrite is needed
+    const configExists = scope === 'global' ? remoteConfig.globalExists : remoteConfig.projectExists;
+    let overwrite = options.force ?? false;
+
+    if (configExists && !overwrite) {
+      // Ask for confirmation
+      if (process.stdin.isTTY) {
+        const answer = await prompt(`  Config exists. Overwrite? (y/N): `);
+        overwrite = answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
+      }
+      if (!overwrite) {
+        console.log('  Skipped (config exists, use --force to overwrite)');
+        client.disconnect();
+        continue;
+      }
+    }
+
+    // Push config
+    console.log(`  Pushing ${scope} config...`);
+    try {
+      const result = await client.pushConfig(scope, configContent, overwrite);
+      if (result.success) {
+        console.log(`  ✓ Config pushed successfully`);
+        if (result.configPath) {
+          console.log(`    Path: ${result.configPath}`);
+        }
+        if (result.backupPath) {
+          console.log(`    Backup: ${result.backupPath}`);
+        }
+        if (result.migrationTriggered) {
+          console.log('    Migration triggered (skills/templates will be installed)');
+        }
+        if (result.requiresRestart) {
+          console.log('    Note: Changes take effect on next run');
+        }
+        await updateLastConnected(alias);
+      } else {
+        console.error(`  ✗ Push failed: ${result.error}`);
+      }
+    } catch (error) {
+      console.error(`  ✗ Push error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
+    client.disconnect();
+  }
+
+  console.log('');
+  console.log('════════════════════════════════════════════════════════════════');
+  console.log('');
+}
+
+/**
  * Execute the remote command.
  */
 export async function executeRemoteCommand(args: string[]): Promise<void> {
@@ -325,6 +574,9 @@ export async function executeRemoteCommand(args: string[]): Promise<void> {
     case 'test':
       await executeRemoteTest(options);
       break;
+    case 'push-config':
+      await executeRemotePushConfig(options);
+      break;
     default:
       console.error(`Unknown subcommand: ${options.subcommand}`);
       console.error('');
@@ -347,9 +599,16 @@ Subcommands:
   list, ls                                   List configured remotes with status
   remove, rm <alias>                         Remove a remote server
   test <alias>                               Test connectivity to a remote
+  push-config <alias>                        Push local config to remote
+  push-config --all                          Push config to all remotes
 
 Add Options:
   --token <token>       Authentication token (required)
+
+Push-Config Options:
+  --scope global|project  Which config to push (default: auto-detect)
+  --preview               Show diff without applying changes
+  --force                 Overwrite existing config without confirmation
 
 Examples:
   # Add a remote server
@@ -366,6 +625,18 @@ Examples:
 
   # Remove a remote
   ralph-tui remote remove prod
+
+  # Push config to a remote
+  ralph-tui remote push-config prod
+
+  # Preview what would be pushed
+  ralph-tui remote push-config prod --preview
+
+  # Push global config with force overwrite
+  ralph-tui remote push-config prod --scope global --force
+
+  # Push to all remotes
+  ralph-tui remote push-config --all --force
 
 Configuration:
   Remotes are stored in: ${REMOTES_CONFIG_PATHS.file}

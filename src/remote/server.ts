@@ -32,6 +32,14 @@ import type {
   EngineEventMessage,
   TokenRefreshMessage,
   TokenRefreshResponseMessage,
+  GetPromptPreviewMessage,
+  PromptPreviewResponseMessage,
+  GetIterationOutputMessage,
+  IterationOutputResponseMessage,
+  CheckConfigMessage,
+  CheckConfigResponseMessage,
+  PushConfigMessage,
+  PushConfigResponseMessage,
 } from './types.js';
 import {
   validateServerToken,
@@ -109,6 +117,15 @@ export interface RemoteServerOptions {
 
   /** Tracker plugin for task queries (US-4) */
   tracker?: TrackerPlugin;
+
+  /** Agent plugin name (e.g., "claude", "opencode") */
+  agentName?: string;
+
+  /** Tracker plugin name (e.g., "beads", "json") */
+  trackerName?: string;
+
+  /** Current model being used (provider/model format) */
+  currentModel?: string;
 }
 
 /**
@@ -475,6 +492,22 @@ export class RemoteServer {
         this.handleTokenRefresh(ws, clientState, message as TokenRefreshMessage);
         break;
 
+      // Prompt preview and iteration output queries
+      case 'get_prompt_preview':
+        await this.handleGetPromptPreview(ws, message as GetPromptPreviewMessage);
+        break;
+      case 'get_iteration_output':
+        this.handleGetIterationOutput(ws, message as GetIterationOutputMessage);
+        break;
+
+      // Config push operations
+      case 'check_config':
+        await this.handleCheckConfig(ws, message as CheckConfigMessage);
+        break;
+      case 'push_config':
+        await this.handlePushConfig(ws, clientState, message as PushConfigMessage);
+        break;
+
       default:
         this.sendError(ws, 'UNKNOWN_MESSAGE', `Unknown message type: ${message.type}`);
     }
@@ -555,6 +588,10 @@ export class RemoteServer {
       rateLimitState: engineState.rateLimitState,
       maxIterations: iterationInfo.maxIterations,
       tasks: [], // Will be populated by get_tasks
+      // Include config info for remote TUI display
+      agentName: this.options.agentName,
+      trackerName: this.options.trackerName,
+      currentModel: this.options.currentModel,
     };
 
     const response = createMessage<StateResponseMessage>('state_response', {
@@ -760,6 +797,107 @@ export class RemoteServer {
   }
 
   /**
+   * Handle get_prompt_preview request - generate a prompt preview for a task.
+   */
+  private async handleGetPromptPreview(
+    ws: ServerWebSocket<WebSocketData>,
+    message: GetPromptPreviewMessage
+  ): Promise<void> {
+    if (!this.options.engine) {
+      const response = createMessage<PromptPreviewResponseMessage>('prompt_preview_response', {
+        success: false,
+        error: 'No engine attached to server',
+      });
+      response.id = message.id;
+      this.send(ws, response);
+      return;
+    }
+
+    try {
+      const result = await this.options.engine.generatePromptPreview(message.taskId);
+      const response = createMessage<PromptPreviewResponseMessage>('prompt_preview_response', {
+        success: result.success,
+        prompt: result.success ? result.prompt : undefined,
+        source: result.success ? result.source : undefined,
+        error: result.success ? undefined : result.error,
+      });
+      response.id = message.id;
+      this.send(ws, response);
+    } catch (error) {
+      const response = createMessage<PromptPreviewResponseMessage>('prompt_preview_response', {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to generate prompt preview',
+      });
+      response.id = message.id;
+      this.send(ws, response);
+    }
+  }
+
+  /**
+   * Handle get_iteration_output request - get iteration output for a task.
+   * Checks both in-memory iterations and current execution state.
+   */
+  private handleGetIterationOutput(
+    ws: ServerWebSocket<WebSocketData>,
+    message: GetIterationOutputMessage
+  ): void {
+    if (!this.options.engine) {
+      const response = createMessage<IterationOutputResponseMessage>('iteration_output_response', {
+        success: false,
+        taskId: message.taskId,
+        error: 'No engine attached to server',
+      });
+      response.id = message.id;
+      this.send(ws, response);
+      return;
+    }
+
+    const engineState = this.options.engine.getState();
+    const taskId = message.taskId;
+
+    // Check if this is the currently executing task
+    if (engineState.currentTask?.id === taskId && engineState.status === 'running') {
+      const response = createMessage<IterationOutputResponseMessage>('iteration_output_response', {
+        success: true,
+        taskId,
+        iteration: engineState.currentIteration,
+        output: engineState.currentOutput,
+        isRunning: true,
+      });
+      response.id = message.id;
+      this.send(ws, response);
+      return;
+    }
+
+    // Check in-memory completed iterations (most recent first)
+    const taskIteration = [...engineState.iterations].reverse().find((iter) => iter.task.id === taskId);
+    if (taskIteration) {
+      const response = createMessage<IterationOutputResponseMessage>('iteration_output_response', {
+        success: true,
+        taskId,
+        iteration: taskIteration.iteration,
+        output: taskIteration.agentResult?.stdout ?? '',
+        startedAt: taskIteration.startedAt,
+        endedAt: taskIteration.endedAt,
+        durationMs: taskIteration.durationMs,
+        isRunning: taskIteration.status === 'running',
+      });
+      response.id = message.id;
+      this.send(ws, response);
+      return;
+    }
+
+    // No iteration found for this task
+    const response = createMessage<IterationOutputResponseMessage>('iteration_output_response', {
+      success: false,
+      taskId,
+      error: 'No iteration found for this task',
+    });
+    response.id = message.id;
+    this.send(ws, response);
+  }
+
+  /**
    * Helper to send an operation error response.
    */
   private sendOperationError(
@@ -774,6 +912,210 @@ export class RemoteServer {
       error,
     });
     response.id = requestId;
+    this.send(ws, response);
+  }
+
+  // ============================================================================
+  // Config Push Handlers
+  // ============================================================================
+
+  /**
+   * Handle check_config request - check what config exists on this remote.
+   * Returns info about global and project config existence and content.
+   */
+  private async handleCheckConfig(
+    ws: ServerWebSocket<WebSocketData>,
+    message: CheckConfigMessage
+  ): Promise<void> {
+    const { homedir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { access, readFile, constants } = await import('node:fs/promises');
+
+    const globalPath = join(homedir(), '.config', 'ralph-tui', 'config.toml');
+    const cwd = process.cwd();
+    const projectPath = join(cwd, '.ralph-tui', 'config.toml');
+
+    let globalExists = false;
+    let projectExists = false;
+    let globalContent: string | undefined;
+    let projectContent: string | undefined;
+
+    // Check global config
+    try {
+      await access(globalPath, constants.R_OK);
+      globalExists = true;
+      globalContent = await readFile(globalPath, 'utf-8');
+    } catch {
+      // Global config doesn't exist or isn't readable
+    }
+
+    // Check project config
+    try {
+      await access(projectPath, constants.R_OK);
+      projectExists = true;
+      projectContent = await readFile(projectPath, 'utf-8');
+    } catch {
+      // Project config doesn't exist or isn't readable
+    }
+
+    const response = createMessage<CheckConfigResponseMessage>('check_config_response', {
+      globalExists,
+      projectExists,
+      globalPath: globalExists ? globalPath : undefined,
+      projectPath: projectExists ? projectPath : undefined,
+      globalContent,
+      projectContent,
+      remoteCwd: cwd,
+    });
+    response.id = message.id;
+    this.send(ws, response);
+  }
+
+  /**
+   * Handle push_config request - write config to the remote.
+   * Creates backup if overwriting, validates TOML, and optionally triggers migration.
+   */
+  private async handlePushConfig(
+    ws: ServerWebSocket<WebSocketData>,
+    clientState: ClientState,
+    message: PushConfigMessage
+  ): Promise<void> {
+    const clientId = `${clientState.id}@${clientState.ip}`;
+    const { homedir } = await import('node:os');
+    const { join, dirname } = await import('node:path');
+    const { access, readFile, writeFile, mkdir, constants } = await import('node:fs/promises');
+    const { parse: parseToml } = await import('smol-toml');
+
+    const cwd = process.cwd();
+    let configPath: string;
+
+    if (message.scope === 'global') {
+      configPath = join(homedir(), '.config', 'ralph-tui', 'config.toml');
+    } else {
+      configPath = join(cwd, '.ralph-tui', 'config.toml');
+    }
+
+    // Validate TOML syntax
+    try {
+      parseToml(message.configContent);
+    } catch (error) {
+      const response = createMessage<PushConfigResponseMessage>('push_config_response', {
+        success: false,
+        error: `Invalid TOML: ${error instanceof Error ? error.message : 'Parse error'}`,
+      });
+      response.id = message.id;
+      this.send(ws, response);
+      await this.auditLogger.logFailure(clientId, 'push_config', 'Invalid TOML', {
+        scope: message.scope,
+      });
+      return;
+    }
+
+    // Check if config exists
+    let configExists = false;
+    try {
+      await access(configPath, constants.R_OK);
+      configExists = true;
+    } catch {
+      // Config doesn't exist
+    }
+
+    // If config exists and overwrite not allowed, return error
+    if (configExists && !message.overwrite) {
+      const response = createMessage<PushConfigResponseMessage>('push_config_response', {
+        success: false,
+        error: `Config already exists at ${configPath}. Use overwrite=true to replace.`,
+        configPath,
+      });
+      response.id = message.id;
+      this.send(ws, response);
+      return;
+    }
+
+    let backupPath: string | undefined;
+
+    // Create backup if overwriting existing config
+    if (configExists && message.overwrite) {
+      try {
+        const existingContent = await readFile(configPath, 'utf-8');
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        backupPath = `${configPath}.backup.${timestamp}`;
+        await writeFile(backupPath, existingContent, 'utf-8');
+      } catch (error) {
+        const response = createMessage<PushConfigResponseMessage>('push_config_response', {
+          success: false,
+          error: `Failed to create backup: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        });
+        response.id = message.id;
+        this.send(ws, response);
+        await this.auditLogger.logFailure(clientId, 'push_config', 'Backup failed', {
+          scope: message.scope,
+        });
+        return;
+      }
+    }
+
+    // Ensure directory exists
+    try {
+      await mkdir(dirname(configPath), { recursive: true });
+    } catch {
+      // Directory may already exist
+    }
+
+    // Write the new config
+    try {
+      await writeFile(configPath, message.configContent, 'utf-8');
+    } catch (error) {
+      const response = createMessage<PushConfigResponseMessage>('push_config_response', {
+        success: false,
+        error: `Failed to write config: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
+      response.id = message.id;
+      this.send(ws, response);
+      await this.auditLogger.logFailure(clientId, 'push_config', 'Write failed', {
+        scope: message.scope,
+        configPath,
+      });
+      return;
+    }
+
+    // Check if engine is running (requires restart for changes to take effect)
+    const requiresRestart = this.options.engine !== undefined &&
+      this.options.engine.getState().status !== 'idle';
+
+    // Trigger auto-migration in background (don't wait for it)
+    let migrationTriggered = false;
+    try {
+      const { checkAndMigrate } = await import('../setup/migration.js');
+      // Run migration in background - don't await
+      checkAndMigrate(cwd, { quiet: true }).then((result) => {
+        if (result?.migrated) {
+          // Migration was performed
+        }
+      }).catch(() => {
+        // Migration failed, but config was still written successfully
+      });
+      migrationTriggered = true;
+    } catch {
+      // Migration module not available
+    }
+
+    // Log the action
+    await this.auditLogger.logAction(clientId, 'push_config', true, undefined, {
+      scope: message.scope,
+      configPath,
+      backupPath,
+      overwrite: message.overwrite,
+    });
+
+    const response = createMessage<PushConfigResponseMessage>('push_config_response', {
+      success: true,
+      configPath,
+      backupPath,
+      migrationTriggered,
+      requiresRestart,
+    });
+    response.id = message.id;
     this.send(ws, response);
   }
 
@@ -967,6 +1309,11 @@ export async function createRemoteServer(
     onStop: options.onStop,
     onConnect: options.onConnect,
     onDisconnect: options.onDisconnect,
+    engine: options.engine,
+    tracker: options.tracker,
+    agentName: options.agentName,
+    trackerName: options.trackerName,
+    currentModel: options.currentModel,
   };
 
   return new RemoteServer(serverOptions);

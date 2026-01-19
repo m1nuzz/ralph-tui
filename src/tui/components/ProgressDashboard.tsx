@@ -30,6 +30,12 @@ export interface ProgressDashboardProps {
   sandboxConfig?: SandboxConfig;
   /** Resolved sandbox mode (when mode is 'auto', this shows what it resolved to) */
   resolvedSandboxMode?: Exclude<SandboxMode, 'auto'>;
+  /** Remote instance info (when viewing a remote) */
+  remoteInfo?: {
+    name: string;
+    host: string;
+    port: number;
+  };
 }
 
 /**
@@ -113,6 +119,7 @@ export function ProgressDashboard({
   currentTaskTitle,
   sandboxConfig,
   resolvedSandboxMode,
+  remoteInfo,
 }: ProgressDashboardProps): ReactNode {
   const statusDisplay = getStatusDisplay(status, currentTaskId);
   const sandboxDisplay = getSandboxDisplay(sandboxConfig, resolvedSandboxMode);
@@ -143,9 +150,17 @@ export function ProgressDashboard({
         overflow: 'hidden',
       }}
     >
-      {/* Top row: Status and Epic name */}
+      {/* Top row: Remote info (if viewing remote), Status and Epic name */}
       <box style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
         <box style={{ flexDirection: 'row', gap: 2, flexShrink: 1 }}>
+          {remoteInfo && (
+            <text>
+              <span fg={colors.accent.primary}>🌐 Remote:</span>
+              <span fg={colors.fg.primary}> {remoteInfo.name}</span>
+              <span fg={colors.fg.dim}> ({remoteInfo.host}:{remoteInfo.port})</span>
+              <span fg={colors.fg.dim}> │ </span>
+            </text>
+          )}
           <text>
             <span fg={statusDisplay.color}>{statusDisplay.indicator}</span>
             <span fg={statusDisplay.color}> {statusDisplay.label}</span>

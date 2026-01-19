@@ -127,6 +127,11 @@ class TestAgentPlugin extends BaseAgentPlugin {
       isRunning: () => false,
     };
   }
+
+  // Test accessor for protected method
+  testGetPreflightSuggestion(): string {
+    return this.getPreflightSuggestion();
+  }
 }
 
 describe('BaseAgentPlugin', () => {
@@ -232,8 +237,7 @@ describe('BaseAgentPlugin', () => {
 
   describe('getPreflightSuggestion', () => {
     test('returns agent-specific suggestion', () => {
-      // Access protected method through type assertion
-      const suggestion = (agent as any).getPreflightSuggestion();
+      const suggestion = agent.testGetPreflightSuggestion();
 
       expect(suggestion).toContain('Test Agent');
       expect(suggestion).toContain('configured');

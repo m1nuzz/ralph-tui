@@ -126,6 +126,8 @@ export interface RunAppProps {
   onAddRemote?: () => void;
   /** Connection toast to display (from InstanceManager) */
   connectionToast?: ConnectionToastMessage | null;
+  /** Instance manager for remote data fetching */
+  instanceManager?: import('../../remote/instance-manager.js').InstanceManager;
 }
 
 /**
@@ -337,6 +339,7 @@ export function RunApp({
   onSelectTab,
   onAddRemote,
   connectionToast,
+  instanceManager,
 }: RunAppProps): ReactNode {
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
@@ -459,8 +462,202 @@ export function RunApp({
   // Rate limit state from engine - tracks primary agent rate limiting
   const [rateLimitState, setRateLimitState] = useState<RateLimitState | null>(null);
 
+  // Remote viewing state
+  const isViewingRemote = selectedTabIndex > 0;
+  const [remoteTasks, setRemoteTasks] = useState<TaskItem[]>([]);
+  const [remoteStatus, setRemoteStatus] = useState<RalphStatus>('ready');
+  const [remoteOutput, setRemoteOutput] = useState('');
+  const [remoteCurrentIteration, setRemoteCurrentIteration] = useState(0);
+  const [remoteMaxIterations, setRemoteMaxIterations] = useState(10);
+  const [remoteCurrentTaskId, setRemoteCurrentTaskId] = useState<string | undefined>(undefined);
+  const [remoteActiveAgent, setRemoteActiveAgent] = useState<ActiveAgentState | null>(null);
+  const [remoteRateLimitState, setRemoteRateLimitState] = useState<RateLimitState | null>(null);
+  const [remoteCurrentTaskTitle, setRemoteCurrentTaskTitle] = useState<string | undefined>(undefined);
+  const [remoteAgentName, setRemoteAgentName] = useState<string | undefined>(undefined);
+  const [remoteTrackerName, setRemoteTrackerName] = useState<string | undefined>(undefined);
+  const [remoteModel, setRemoteModel] = useState<string | undefined>(undefined);
+  // Cache for remote iteration output by task ID (similar to historicalOutputCache for local)
+  const [remoteIterationCache, setRemoteIterationCache] = useState<Map<string, {
+    iteration: number;
+    output: string;
+    startedAt?: string;
+    endedAt?: string;
+    durationMs?: number;
+    isRunning: boolean;
+  }>>(new Map());
+
+  // Get the selected tab's connection status from instanceTabs
+  // This is used to trigger data fetch when connection completes
+  const selectedTabStatus = instanceTabs?.[selectedTabIndex]?.status;
+
+  // Fetch remote data when switching to a remote tab AND when it becomes connected
+  useEffect(() => {
+    import('fs').then(fs => {
+      fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] useEffect: isViewingRemote=${isViewingRemote}, instanceManager=${instanceManager ? 'exists' : 'null'}, selectedTabIndex=${selectedTabIndex}, selectedTabStatus=${selectedTabStatus}\n`);
+    });
+    if (!isViewingRemote || !instanceManager) return;
+
+    // Wait for the tab to be connected before fetching data
+    // This fixes the issue where first tab select doesn't load data because
+    // the client is still in 'connecting' state
+    if (selectedTabStatus !== 'connected') {
+      import('fs').then(fs => {
+        fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] useEffect: Skipping fetch, tab not connected yet (status=${selectedTabStatus})\n`);
+      });
+      return;
+    }
+
+    const fetchRemoteData = async () => {
+      const fs = await import('fs');
+      // Debug: Check connection status
+      const selectedTab = instanceManager.getSelectedTab();
+      const client = instanceManager.getSelectedClient();
+      fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] fetchRemoteData: Tab=${selectedTab?.label}, Status=${selectedTab?.status}, Client=${client ? 'exists' : 'null'}\n`);
+
+      // Get remote state
+      const state = await instanceManager.getRemoteState();
+      fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] getRemoteState: ${state ? 'received' : 'null'}\n`);
+      if (state) {
+        // Convert engine status to RalphStatus
+        // Engine statuses: 'idle' | 'running' | 'pausing' | 'paused' | 'stopping'
+        const statusMap: Record<string, RalphStatus> = {
+          idle: 'ready',
+          running: 'running',
+          pausing: 'pausing',
+          paused: 'paused',
+          stopping: 'stopped',
+        };
+        setRemoteStatus(statusMap[state.status] || 'ready');
+        setRemoteCurrentIteration(state.currentIteration);
+        setRemoteMaxIterations(state.maxIterations);
+        setRemoteOutput(state.currentOutput || '');
+        if (state.currentTask) {
+          setRemoteCurrentTaskId(state.currentTask.id);
+          setRemoteCurrentTaskTitle(state.currentTask.title);
+        }
+        // Capture remote agent and rate limit state
+        if (state.activeAgent) {
+          setRemoteActiveAgent(state.activeAgent);
+        }
+        if (state.rateLimitState) {
+          setRemoteRateLimitState(state.rateLimitState);
+        }
+        // Capture remote config info for display
+        if (state.agentName) {
+          setRemoteAgentName(state.agentName);
+        }
+        if (state.trackerName) {
+          setRemoteTrackerName(state.trackerName);
+        }
+        if (state.currentModel) {
+          setRemoteModel(state.currentModel);
+        }
+      }
+
+      // Fetch tasks separately (getRemoteState returns empty tasks array)
+      const tasks = await instanceManager.getRemoteTasks();
+      fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] getRemoteTasks: ${tasks ? `${tasks.length} tasks` : 'null'}\n`);
+      if (tasks && tasks.length > 0) {
+        // Convert tasks and mark the currently running task as 'active'
+        const convertedTasks = convertTasksWithDependencyStatus(tasks);
+        const currentTaskId = state?.currentTask?.id;
+        if (currentTaskId) {
+          const updatedTasks = convertedTasks.map(t =>
+            t.id === currentTaskId ? { ...t, status: 'active' as const } : t
+          );
+          setRemoteTasks(updatedTasks);
+        } else {
+          setRemoteTasks(convertedTasks);
+        }
+      }
+
+      // Subscribe to engine events
+      await instanceManager.subscribeToSelectedRemote();
+    };
+
+    fetchRemoteData();
+
+    // Subscribe to engine events from InstanceManager
+    const unsubscribe = instanceManager.onEngineEvent((event) => {
+      switch (event.type) {
+        case 'engine:started':
+          setRemoteStatus('running');
+          break;
+        case 'engine:stopped':
+          setRemoteStatus(event.reason === 'completed' ? 'complete' : 'ready');
+          break;
+        case 'engine:paused':
+          setRemoteStatus('paused');
+          break;
+        case 'engine:resumed':
+          setRemoteStatus('running');
+          break;
+        case 'iteration:started':
+          setRemoteCurrentIteration(event.iteration);
+          setRemoteCurrentTaskId(event.task.id);
+          setRemoteCurrentTaskTitle(event.task.title);
+          setRemoteOutput(''); // Clear output for new iteration
+          // Mark this task as active in the task list
+          setRemoteTasks((prevTasks) =>
+            prevTasks.map((t) =>
+              t.id === event.task.id
+                ? { ...t, status: 'active' as const }
+                : t.status === 'active'
+                  ? { ...t, status: 'actionable' as const }
+                  : t
+            )
+          );
+          break;
+        case 'agent:output':
+          if (event.stream === 'stdout') {
+            setRemoteOutput((prev) => prev + event.data);
+          }
+          break;
+        case 'task:completed':
+          // Refresh task list
+          instanceManager.getRemoteTasks().then((tasks) => {
+            if (tasks) {
+              setRemoteTasks(convertTasksWithDependencyStatus(tasks));
+            }
+          });
+          break;
+        case 'agent:switched':
+          // Agent was switched (primary to fallback or recovery) on remote
+          setRemoteActiveAgent({
+            plugin: event.newAgent,
+            reason: event.reason,
+            since: event.timestamp,
+          });
+          if (event.rateLimitState) {
+            setRemoteRateLimitState(event.rateLimitState);
+          }
+          break;
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      instanceManager.unsubscribeFromSelectedRemote();
+    };
+  }, [isViewingRemote, selectedTabIndex, selectedTabStatus, instanceManager]);
+
+  // Computed display values that switch between local and remote state
+  // These are used in the UI to show the appropriate data based on which tab is selected
+  const displayStatus = isViewingRemote ? remoteStatus : status;
+  const displayCurrentIteration = isViewingRemote ? remoteCurrentIteration : currentIteration;
+  const displayMaxIterations = isViewingRemote ? remoteMaxIterations : maxIterations;
+  const displayCurrentTaskId = isViewingRemote ? remoteCurrentTaskId : currentTaskId;
+  const displayCurrentTaskTitle = isViewingRemote ? remoteCurrentTaskTitle : currentTaskTitle;
+
   // Compute display agent name - prefer active agent from engine state, fallback to config
-  const displayAgentName = activeAgentState?.plugin ?? agentName;
+  // For remote viewing, use remote active agent state, then remote config, then local config
+  const displayAgentName = isViewingRemote
+    ? (remoteActiveAgent?.plugin ?? remoteAgentName ?? agentName)
+    : (activeAgentState?.plugin ?? agentName);
+
+  // Compute display tracker and model for local vs remote
+  const displayTrackerName = isViewingRemote ? (remoteTrackerName ?? trackerName) : trackerName;
+  const displayModel = isViewingRemote ? (remoteModel ?? currentModel) : currentModel;
 
   // Count running subagents for status indicator when panel is hidden
   const runningSubagentCount = useMemo(() => {
@@ -476,6 +673,7 @@ export function RunApp({
   // Filter and sort tasks for display
   // Sort order: active → actionable → blocked → done → closed
   // This is computed early so keyboard handlers can use displayedTasks.length
+  // Use remoteTasks when viewing a remote instance
   const displayedTasks = useMemo(() => {
     // Status priority for sorting (lower = higher priority)
     const statusPriority: Record<TaskStatus, number> = {
@@ -488,13 +686,15 @@ export function RunApp({
       closed: 6,
     };
 
-    const filtered = showClosedTasks ? tasks : tasks.filter((t) => t.status !== 'closed');
+    // Use remote tasks when viewing remote, local tasks otherwise
+    const sourceTasks = isViewingRemote ? remoteTasks : tasks;
+    const filtered = showClosedTasks ? sourceTasks : sourceTasks.filter((t) => t.status !== 'closed');
     return [...filtered].sort((a, b) => {
       const priorityA = statusPriority[a.status] ?? 10;
       const priorityB = statusPriority[b.status] ?? 10;
       return priorityA - priorityB;
     });
-  }, [tasks, showClosedTasks]);
+  }, [tasks, remoteTasks, isViewingRemote, showClosedTasks]);
 
   // Clamp selectedIndex when displayedTasks shrinks (e.g., when hiding closed tasks)
   useEffect(() => {
@@ -546,16 +746,33 @@ export function RunApp({
     setTemplateSource(undefined);
 
     void (async () => {
-      const result = await engine.generatePromptPreview(effectiveTaskId);
-      // Don't update state if this effect was cancelled (user changed task again)
-      if (cancelled) return;
+      // Use remote API when viewing remote, local engine otherwise
+      if (isViewingRemote && instanceManager) {
+        const result = await instanceManager.getRemotePromptPreview(effectiveTaskId);
+        if (cancelled) return;
 
-      if (result.success) {
-        setPromptPreview(result.prompt);
-        setTemplateSource(result.source);
+        if (result === null) {
+          setPromptPreview('Unable to fetch prompt preview from remote.\n\nConnection may not be ready.');
+          setTemplateSource(undefined);
+        } else if (result.success) {
+          setPromptPreview(result.prompt);
+          setTemplateSource(result.source);
+        } else {
+          setPromptPreview(`Error: ${result.error}`);
+          setTemplateSource(undefined);
+        }
       } else {
-        setPromptPreview(`Error: ${result.error}`);
-        setTemplateSource(undefined);
+        const result = await engine.generatePromptPreview(effectiveTaskId);
+        // Don't update state if this effect was cancelled (user changed task again)
+        if (cancelled) return;
+
+        if (result.success) {
+          setPromptPreview(result.prompt);
+          setTemplateSource(result.source);
+        } else {
+          setPromptPreview(`Error: ${result.error}`);
+          setTemplateSource(undefined);
+        }
       }
     })();
 
@@ -563,7 +780,55 @@ export function RunApp({
     return () => {
       cancelled = true;
     };
-  }, [detailsViewMode, viewMode, displayedTasks, selectedIndex, iterations, iterationSelectedIndex, engine]);
+  }, [detailsViewMode, viewMode, displayedTasks, selectedIndex, iterations, iterationSelectedIndex, engine, isViewingRemote, instanceManager]);
+
+  // Fetch remote iteration output when selecting a different task (for remote viewing)
+  // This fills the remoteIterationCache so the useMemo can use it synchronously
+  useEffect(() => {
+    // Skip if not viewing remote or no instance manager
+    if (!isViewingRemote || !instanceManager) return;
+
+    // Get the effective task ID that we're viewing
+    const selectedIteration = viewMode === 'iterations' && iterations.length > 0
+      ? iterations[iterationSelectedIndex]
+      : undefined;
+    const effectiveTaskId = viewMode === 'iterations'
+      ? selectedIteration?.task?.id
+      : displayedTasks[selectedIndex]?.id;
+
+    // Skip if no task selected or if this is the currently running task
+    // (currently running task uses live remoteOutput, not cached)
+    if (!effectiveTaskId || effectiveTaskId === remoteCurrentTaskId) return;
+
+    // Check if we already have this task in cache
+    if (remoteIterationCache.has(effectiveTaskId)) return;
+
+    // Fetch iteration output from remote
+    let cancelled = false;
+    void (async () => {
+      const result = await instanceManager.getRemoteIterationOutput(effectiveTaskId);
+      if (cancelled) return;
+
+      if (result && result.success && result.output !== undefined) {
+        setRemoteIterationCache((prev) => {
+          const next = new Map(prev);
+          next.set(effectiveTaskId, {
+            iteration: result.iteration ?? 0,
+            output: result.output ?? '',
+            startedAt: result.startedAt,
+            endedAt: result.endedAt,
+            durationMs: result.durationMs,
+            isRunning: result.isRunning ?? false,
+          });
+          return next;
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isViewingRemote, instanceManager, viewMode, iterations, iterationSelectedIndex, displayedTasks, selectedIndex, remoteCurrentTaskId, remoteIterationCache]);
 
   // Update output parser when agent changes (parser was created before config was loaded)
   useEffect(() => {
@@ -990,16 +1255,49 @@ export function RunApp({
           // When running/executing/selecting, pause will transition to pausing, then to paused
           // When pausing, pressing p again will cancel the pause request
           // When paused, resume will transition back to selecting
-          if (status === 'running' || status === 'executing' || status === 'selecting') {
-            engine.pause();
-            setStatus('pausing');
-          } else if (status === 'pausing') {
-            // Cancel pause request
-            engine.resume();
-            setStatus('selecting');
-          } else if (status === 'paused') {
-            engine.resume();
-            // Status will update via engine event
+          if (isViewingRemote && instanceManager) {
+            // Route to remote instance
+            import('fs').then(fs => {
+              fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] 'p' pressed, isViewingRemote=true, displayStatus=${displayStatus}\n`);
+            });
+            if (displayStatus === 'running' || displayStatus === 'executing' || displayStatus === 'selecting') {
+              // Set status to 'pausing' immediately for feedback
+              setRemoteStatus('pausing');
+              instanceManager.sendRemoteCommand('pause').then(result => {
+                import('fs').then(fs => {
+                  fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] pause command result: ${result}\n`);
+                });
+              });
+            } else if (displayStatus === 'pausing') {
+              // Cancel pause request - set back to running
+              setRemoteStatus('running');
+              instanceManager.sendRemoteCommand('resume').then(result => {
+                import('fs').then(fs => {
+                  fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] resume (cancel pause) command result: ${result}\n`);
+                });
+              });
+            } else if (displayStatus === 'paused') {
+              // Resume from paused - set to selecting
+              setRemoteStatus('selecting');
+              instanceManager.sendRemoteCommand('resume').then(result => {
+                import('fs').then(fs => {
+                  fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] resume command result: ${result}\n`);
+                });
+              });
+            }
+          } else {
+            // Local engine control
+            if (status === 'running' || status === 'executing' || status === 'selecting') {
+              engine.pause();
+              setStatus('pausing');
+            } else if (status === 'pausing') {
+              // Cancel pause request
+              engine.resume();
+              setStatus('selecting');
+            } else if (status === 'paused') {
+              engine.resume();
+              // Status will update via engine event
+            }
           }
           break;
 
@@ -1031,33 +1329,45 @@ export function RunApp({
 
         case 's':
           // Start/continue execution - 's' always means "keep going"
-          if (status === 'ready' && onStart) {
-            // First start - use onStart callback
-            setStatus('running');
-            onStart();
-          } else if (status === 'stopped' || status === 'idle') {
-            // Continue after stop - use engine.continueExecution()
-            if (currentIteration >= maxIterations) {
-              // At max iterations, add one more then continue
-              engine.addIterations(1).then((shouldContinue) => {
-                if (shouldContinue) {
-                  setStatus('running');
-                  engine.continueExecution();
-                }
-              }).catch((err) => {
-                console.error('Failed to add iteration:', err);
-              });
-            } else {
-              // Have iterations remaining, just continue
+          if (isViewingRemote && instanceManager) {
+            // Route to remote instance - send continue command
+            if (displayStatus === 'stopped' || displayStatus === 'idle' || displayStatus === 'ready') {
+              instanceManager.sendRemoteCommand('continue');
+            }
+          } else {
+            // Local engine control
+            if (status === 'ready' && onStart) {
+              // First start - use onStart callback
               setStatus('running');
-              engine.continueExecution();
+              onStart();
+            } else if (status === 'stopped' || status === 'idle') {
+              // Continue after stop - use engine.continueExecution()
+              if (currentIteration >= maxIterations) {
+                // At max iterations, add one more then continue
+                engine.addIterations(1).then((shouldContinue) => {
+                  if (shouldContinue) {
+                    setStatus('running');
+                    engine.continueExecution();
+                  }
+                }).catch((err) => {
+                  console.error('Failed to add iteration:', err);
+                });
+              } else {
+                // Have iterations remaining, just continue
+                setStatus('running');
+                engine.continueExecution();
+              }
             }
           }
           break;
 
         case 'r':
           // Refresh task list from tracker
-          engine.refreshTasks();
+          if (isViewingRemote && instanceManager) {
+            instanceManager.sendRemoteCommand('refreshTasks');
+          } else {
+            engine.refreshTasks();
+          }
           break;
 
         case '+':
@@ -1067,27 +1377,38 @@ export function RunApp({
           // Add/remove 10 iterations: +/= add, -/_ remove
           const isPlus = key.name === '+' || key.name === '=';
           const isMinus = key.name === '-' || key.name === '_';
+          const effectiveStatus = isViewingRemote ? displayStatus : status;
           if ((isPlus || isMinus) &&
-              (status === 'ready' || status === 'running' || status === 'executing' || status === 'paused' || status === 'stopped' || status === 'idle' || status === 'complete')) {
-            if (isPlus) {
-              engine.addIterations(10).then((shouldContinue) => {
-                if (shouldContinue || status === 'complete') {
-                  setStatus('running');
-                  engine.continueExecution();
-                }
-              }).catch((err) => {
-                console.error('Failed to add iterations:', err);
-              });
+              (effectiveStatus === 'ready' || effectiveStatus === 'running' || effectiveStatus === 'executing' || effectiveStatus === 'paused' || effectiveStatus === 'stopped' || effectiveStatus === 'idle' || effectiveStatus === 'complete')) {
+            if (isViewingRemote && instanceManager) {
+              // Route to remote instance
+              if (isPlus) {
+                instanceManager.addRemoteIterations(10);
+              } else {
+                instanceManager.removeRemoteIterations(10);
+              }
             } else {
-              engine.removeIterations(10)
-                .then((success) => {
-                  if (!success) {
-                    console.log('Cannot reduce below current iteration or minimum of 1');
+              // Local engine control
+              if (isPlus) {
+                engine.addIterations(10).then((shouldContinue) => {
+                  if (shouldContinue || status === 'complete') {
+                    setStatus('running');
+                    engine.continueExecution();
                   }
-                })
-                .catch((err) => {
-                  console.error('Failed to remove iterations:', err);
+                }).catch((err) => {
+                  console.error('Failed to add iterations:', err);
                 });
+              } else {
+                engine.removeIterations(10)
+                  .then((success) => {
+                    if (!success) {
+                      console.log('Cannot reduce below current iteration or minimum of 1');
+                    }
+                  })
+                  .catch((err) => {
+                    console.error('Failed to remove iterations:', err);
+                  });
+              }
             }
           }
           break;
@@ -1197,6 +1518,10 @@ export function RunApp({
         case '7':
         case '8':
         case '9':
+          // Debug: write to file since stderr may not work in TUI mode
+          import('fs').then(fs => {
+            fs.appendFileSync('/tmp/ralph-keys.log', `[${new Date().toISOString()}] Number key: ${key.name}, tabs: ${instanceTabs?.length}, onSelectTab: ${onSelectTab ? 'exists' : 'null'}\n`);
+          });
           if (instanceTabs && onSelectTab) {
             const tabIndex = parseInt(key.name, 10) - 1;
             if (tabIndex < instanceTabs.length) {
@@ -1263,6 +1588,51 @@ export function RunApp({
   // - If completed iteration exists: show that iteration's output with timing
   // - Otherwise: undefined (will show "waiting" or appropriate message)
   const selectedTaskIteration = useMemo(() => {
+    // When viewing remote, check if we're viewing the currently running task
+    // or a different task (which should use the cache)
+    if (isViewingRemote) {
+      // If this is the currently running task, show live output
+      if (effectiveTaskId === remoteCurrentTaskId && remoteStatus === 'running') {
+        const timing: IterationTimingInfo = {
+          isRunning: true,
+        };
+        return {
+          iteration: remoteCurrentIteration,
+          output: remoteOutput || undefined,
+          segments: undefined,
+          timing,
+        };
+      }
+
+      // Check if we have cached iteration data for this task
+      if (effectiveTaskId && remoteIterationCache.has(effectiveTaskId)) {
+        const cached = remoteIterationCache.get(effectiveTaskId)!;
+        const timing: IterationTimingInfo = {
+          startedAt: cached.startedAt,
+          endedAt: cached.endedAt,
+          durationMs: cached.durationMs,
+          isRunning: cached.isRunning,
+        };
+        return {
+          iteration: cached.iteration,
+          output: cached.output,
+          segments: undefined,
+          timing,
+        };
+      }
+
+      // No data available yet (being fetched or task never run)
+      const timing: IterationTimingInfo = {
+        isRunning: false,
+      };
+      return {
+        iteration: 0,
+        output: undefined,
+        segments: undefined,
+        timing,
+      };
+    }
+
     // If no effective task ID, check if there's currently executing task and show that
     if (!effectiveTaskId) {
       // If there's a current task executing, show its output even if no task selected
@@ -1323,7 +1693,7 @@ export function RunApp({
 
     // Task hasn't been run yet (or historical log not yet loaded)
     return { iteration: 0, output: undefined, segments: undefined, timing: undefined };
-  }, [effectiveTaskId, selectedTask, selectedIteration, viewMode, currentTaskId, currentIteration, currentOutput, currentSegments, iterations, historicalOutputCache, currentIterationStartedAt]);
+  }, [effectiveTaskId, selectedTask, selectedIteration, viewMode, currentTaskId, currentIteration, currentOutput, currentSegments, iterations, historicalOutputCache, currentIterationStartedAt, isViewingRemote, remoteStatus, remoteCurrentIteration, remoteOutput, remoteIterationCache, remoteCurrentTaskId]);
 
   // Compute the actual output to display based on selectedSubagentId
   // When a subagent is selected (not task root), try to get its specific output
@@ -1626,35 +1996,53 @@ export function RunApp({
 
       {/* Header - compact design showing essential info + agent/tracker + fallback status */}
       <Header
-        status={status}
+        status={displayStatus}
         elapsedTime={elapsedTime}
-        currentTaskId={currentTaskId}
-        currentTaskTitle={currentTaskTitle}
+        currentTaskId={displayCurrentTaskId}
+        currentTaskTitle={displayCurrentTaskTitle}
         completedTasks={completedTasks}
         totalTasks={totalTasks}
-        agentName={agentName}
-        trackerName={trackerName}
-        activeAgentState={activeAgentState}
-        rateLimitState={rateLimitState}
-        currentIteration={currentIteration}
-        maxIterations={maxIterations}
-        currentModel={currentModel}
+        agentName={displayAgentName}
+        trackerName={displayTrackerName}
+        activeAgentState={isViewingRemote ? remoteActiveAgent : activeAgentState}
+        rateLimitState={isViewingRemote ? remoteRateLimitState : rateLimitState}
+        currentIteration={displayCurrentIteration}
+        maxIterations={displayMaxIterations}
+        currentModel={displayModel}
         sandboxConfig={sandboxConfig}
         resolvedSandboxMode={resolvedSandboxMode}
+        remoteInfo={
+          isViewingRemote && instanceTabs?.[selectedTabIndex]
+            ? {
+                name: instanceTabs[selectedTabIndex].alias ?? instanceTabs[selectedTabIndex].label,
+                host: instanceTabs[selectedTabIndex].host ?? 'unknown',
+                port: instanceTabs[selectedTabIndex].port ?? 0,
+              }
+            : undefined
+        }
       />
 
       {/* Progress Dashboard - toggleable with 'd' key */}
       {showDashboard && (
         <ProgressDashboard
-          status={status}
+          status={displayStatus}
           agentName={displayAgentName}
-          currentModel={currentModel}
-          trackerName={trackerName || 'beads'}
+          currentModel={displayModel}
+          trackerName={displayTrackerName || 'beads'}
           epicName={epicName}
-          currentTaskId={currentTaskId}
-          currentTaskTitle={currentTaskTitle}
+          currentTaskId={displayCurrentTaskId}
+          currentTaskTitle={displayCurrentTaskTitle}
           sandboxConfig={sandboxConfig}
           resolvedSandboxMode={resolvedSandboxMode}
+          remoteInfo={
+            isViewingRemote && instanceTabs?.[selectedTabIndex]
+              ? {
+                  name: instanceTabs[selectedTabIndex].alias ?? instanceTabs[selectedTabIndex].label,
+                  host: instanceTabs[selectedTabIndex].host ?? 'unknown',
+                  port: instanceTabs[selectedTabIndex].port ?? 0,
+                }
+              : undefined
+          }
         />
       )}
 
