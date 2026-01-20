@@ -409,11 +409,21 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
   }
 
   async updateTaskStatus(
-    _id: string,
-    _status: TrackerTaskStatus
+    id: string,
+    status: TrackerTaskStatus
   ): Promise<TrackerTask | undefined> {
-    // Implemented in US-5.
-    return undefined;
+    const brStatus = mapStatusToBr(status);
+    const args = ['update', id, '--status', brStatus];
+
+    const { exitCode, stderr } = await execBr(args, this.workingDir);
+
+    if (exitCode !== 0) {
+      console.error(`br update ${id} --status ${brStatus} failed:`, stderr);
+      return undefined;
+    }
+
+    // Fetch and return the updated task
+    return this.getTask(id);
   }
 }
 

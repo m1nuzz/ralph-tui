@@ -388,4 +388,80 @@ describe('BeadsRustTrackerPlugin', () => {
       expect(mockSpawnArgs[0]?.args).toEqual(['close', 't1']);
     });
   });
+
+  describe('updateTaskStatus', () => {
+    test('executes br update <id> --status <status> and returns updated task', async () => {
+      mockSpawnResponses = [{ exitCode: 0, stdout: 'br version 0.4.1\n' }];
+
+      const plugin = new BeadsRustTrackerPlugin();
+      await plugin.initialize({ workingDir: '/test' });
+
+      mockSpawnArgs = [];
+      mockSpawnResponses = [
+        { exitCode: 0 },
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { id: 't1', title: 'Task 1', status: 'in_progress', priority: 2 },
+          ]),
+        },
+      ];
+
+      const task = await plugin.updateTaskStatus('t1', 'in_progress');
+
+      expect(task?.status).toBe('in_progress');
+      expect(mockSpawnArgs.length).toBe(2);
+      expect(mockSpawnArgs[0]?.args).toEqual([
+        'update',
+        't1',
+        '--status',
+        'in_progress',
+      ]);
+      expect(mockSpawnArgs[1]?.args).toEqual(['show', 't1', '--json']);
+    });
+
+    test('maps completed to br closed', async () => {
+      mockSpawnResponses = [{ exitCode: 0, stdout: 'br version 0.4.1\n' }];
+
+      const plugin = new BeadsRustTrackerPlugin();
+      await plugin.initialize({ workingDir: '/test' });
+
+      mockSpawnArgs = [];
+      mockSpawnResponses = [
+        { exitCode: 0 },
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { id: 't1', title: 'Task 1', status: 'closed', priority: 2 },
+          ]),
+        },
+      ];
+
+      const task = await plugin.updateTaskStatus('t1', 'completed');
+
+      expect(mockSpawnArgs[0]?.args).toEqual(['update', 't1', '--status', 'closed']);
+      expect(task?.status).toBe('completed');
+    });
+
+    test('returns undefined when br update fails', async () => {
+      mockSpawnResponses = [{ exitCode: 0, stdout: 'br version 0.4.1\n' }];
+
+      const plugin = new BeadsRustTrackerPlugin();
+      await plugin.initialize({ workingDir: '/test' });
+
+      mockSpawnArgs = [];
+      mockSpawnResponses = [{ exitCode: 1, stderr: 'permission denied' }];
+
+      const task = await plugin.updateTaskStatus('t1', 'in_progress');
+
+      expect(task).toBeUndefined();
+      expect(mockSpawnArgs.length).toBe(1);
+      expect(mockSpawnArgs[0]?.args).toEqual([
+        'update',
+        't1',
+        '--status',
+        'in_progress',
+      ]);
+    });
+  });
 });
