@@ -61,6 +61,14 @@ function isOpenCodeAgent(agentPlugin?: string): boolean {
   return agentPlugin?.toLowerCase() === 'opencode';
 }
 
+function isGeminiAgent(agentPlugin?: string): boolean {
+  return agentPlugin?.toLowerCase() === 'gemini';
+}
+
+function isCodexAgent(agentPlugin?: string): boolean {
+  return agentPlugin?.toLowerCase() === 'codex';
+}
+
 /**
  * Structure of an OpenCode JSONL event.
  */
@@ -81,6 +89,121 @@ interface OpenCodeEvent {
   error?: {
     message?: string;
   };
+}
+
+/**
+ * Structure of a Gemini CLI JSONL event.
+ * Gemini CLI uses --output-format stream-json which emits events like:
+ * - init: session initialization
+ * - message: text from user (role=user) or assistant (role=assistant)
+ * - tool_use: tool being called
+ * - tool_result: tool execution result
+ * - result: final stats (not content)
+ */
+interface GeminiEvent {
+  type: 'init' | 'message' | 'tool_use' | 'tool_call' | 'tool_result' | 'function_result' | 'result' | 'error';
+  role?: 'user' | 'assistant';
+  content?: string;
+  name?: string;
+  tool_name?: string;
+  tool_id?: string;
+  arguments?: unknown;
+  args?: unknown;
+  input?: unknown;
+  parameters?: unknown;
+  is_error?: boolean;
+  error?: unknown;
+  status?: string;
+  stats?: {
+    total_tokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+}
+
+/**
+ * Parse a Gemini CLI JSONL line and return the parsed event if valid.
+ */
+function parseGeminiJsonlLine(line: string): { success: boolean; event?: GeminiEvent } {
+  if (!line.trim() || !line.startsWith('{')) {
+    return { success: false };
+  }
+
+  try {
+    const parsed = JSON.parse(line) as GeminiEvent;
+    // Check if it looks like a Gemini event (has type field with known values)
+    if (parsed.type && ['init', 'message', 'tool_use', 'tool_call', 'tool_result', 'function_result', 'result', 'error'].includes(parsed.type)) {
+      return { success: true, event: parsed };
+    }
+    return { success: false };
+  } catch {
+    return { success: false };
+  }
+}
+
+/**
+ * Format a Gemini event for display.
+ * Returns undefined for events that shouldn't be displayed (like init, user messages, stats).
+ */
+function formatGeminiEventForDisplay(event: GeminiEvent): string | undefined {
+  switch (event.type) {
+    case 'message':
+      // Skip user messages (they echo the input prompt)
+      if (event.role === 'user') {
+        return undefined;
+      }
+      // Assistant message - the main content we want to display
+      if (event.role === 'assistant' && event.content) {
+        return event.content;
+      }
+      break;
+
+    case 'tool_use':
+    case 'tool_call': {
+      // Tool being called
+      const toolName = event.tool_name || event.name || 'unknown';
+      const input = event.parameters || event.arguments || event.args || event.input;
+      if (input && typeof input === 'object') {
+        // Show tool name and key input details
+        const inputStr = Object.entries(input as Record<string, unknown>)
+          .slice(0, 2)
+          .map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 50) : '...'}`)
+          .join(', ');
+        return `[Tool: ${toolName}] ${inputStr}`;
+      }
+      return `[Tool: ${toolName}]`;
+    }
+
+    case 'tool_result':
+    case 'function_result': {
+      // Tool completed - only show if error
+      if (event.is_error === true || event.status === 'error') {
+        const errorMsg = typeof event.error === 'string' ? event.error :
+                        typeof event.error === 'object' && event.error !== null && 'message' in event.error
+                          ? String((event.error as { message?: unknown }).message)
+                          : 'tool execution failed';
+        return `[Tool Error] ${errorMsg}`;
+      }
+      // Don't display successful tool results (too verbose)
+      return undefined;
+    }
+
+    case 'error': {
+      // Error from Gemini
+      const errorMsg = typeof event.error === 'string' ? event.error :
+                      typeof event.error === 'object' && event.error !== null && 'message' in event.error
+                        ? String((event.error as { message?: unknown }).message)
+                        : 'Unknown error';
+      return `Error: ${errorMsg}`;
+    }
+
+    case 'init':
+    case 'result':
+      // Skip init (session start) and result (stats) events
+      return undefined;
+  }
+
+  return undefined;
 }
 
 /**
@@ -224,6 +347,8 @@ export function parseAgentOutput(rawOutput: string, agentPlugin?: string): strin
   const plainTextLines: string[] = [];
   const useDroidParser = isDroidAgent(agentPlugin);
   const useOpenCodeParser = isOpenCodeAgent(agentPlugin);
+  const useGeminiParser = isGeminiAgent(agentPlugin);
+  const useCodexParser = isCodexAgent(agentPlugin);
   const droidCostAccumulator = useDroidParser ? new DroidCostAccumulator() : null;
   let hasJsonl = false;
 
@@ -253,6 +378,19 @@ export function parseAgentOutput(rawOutput: string, agentPlugin?: string): strin
           parsedParts.push(openCodeDisplay);
         }
         continue; // Skip generic parsing for opencode events
+      }
+    }
+
+    // Gemini CLI parsing (also used for Codex which has similar format)
+    if (useGeminiParser || useCodexParser) {
+      const geminiResult = parseGeminiJsonlLine(line);
+      if (geminiResult.success && geminiResult.event) {
+        hasJsonl = true;
+        const geminiDisplay = formatGeminiEventForDisplay(geminiResult.event);
+        if (geminiDisplay !== undefined) {
+          parsedParts.push(geminiDisplay);
+        }
+        continue; // Skip generic parsing for gemini/codex events
       }
     }
 
@@ -340,11 +478,15 @@ export class StreamingOutputParser {
   private lastCostSummary = '';
   private isDroid: boolean;
   private isOpenCode: boolean;
+  private isGemini: boolean;
+  private isCodex: boolean;
   private droidCostAccumulator?: DroidCostAccumulator;
 
   constructor(options: StreamingOutputParserOptions = {}) {
     this.isDroid = isDroidAgent(options.agentPlugin);
     this.isOpenCode = isOpenCodeAgent(options.agentPlugin);
+    this.isGemini = isGeminiAgent(options.agentPlugin);
+    this.isCodex = isCodexAgent(options.agentPlugin);
     if (this.isDroid) {
       this.droidCostAccumulator = new DroidCostAccumulator();
     }
@@ -358,6 +500,8 @@ export class StreamingOutputParser {
     const wasDroid = this.isDroid;
     this.isDroid = isDroidAgent(agentPlugin);
     this.isOpenCode = isOpenCodeAgent(agentPlugin);
+    this.isGemini = isGeminiAgent(agentPlugin);
+    this.isCodex = isCodexAgent(agentPlugin);
     if (this.isDroid && !wasDroid) {
       this.droidCostAccumulator = new DroidCostAccumulator();
     }
@@ -479,6 +623,16 @@ export class StreamingOutputParser {
       }
     }
 
+    // Gemini/Codex CLI parsing
+    if (this.isGemini || this.isCodex) {
+      const geminiResult = parseGeminiJsonlLine(trimmed);
+      if (geminiResult.success && geminiResult.event) {
+        const geminiDisplay = formatGeminiEventForDisplay(geminiResult.event);
+        // Return the display text or undefined (to skip init/stats events)
+        return geminiDisplay;
+      }
+    }
+
     // Not JSON - return as plain text if it's not just whitespace
     if (!trimmed.startsWith('{')) {
       return trimmed;
@@ -578,6 +732,26 @@ export class StreamingOutputParser {
           return [{ text: displayText }];
         }
         // OpenCode event was recognized but nothing to display (system events)
+        return [];
+      }
+    }
+
+    // Gemini/Codex CLI segment extraction
+    if (this.isGemini || this.isCodex) {
+      const geminiResult = parseGeminiJsonlLine(trimmed);
+      if (geminiResult.success && geminiResult.event) {
+        const displayText = formatGeminiEventForDisplay(geminiResult.event);
+        if (displayText) {
+          // Format tool calls with color
+          if (geminiResult.event.type === 'tool_use' || geminiResult.event.type === 'tool_call') {
+            return [{ text: displayText, color: 'cyan' }];
+          }
+          if (geminiResult.event.type === 'error') {
+            return [{ text: displayText, color: 'yellow' }];
+          }
+          return [{ text: displayText }];
+        }
+        // Gemini event was recognized but nothing to display (init/stats events)
         return [];
       }
     }
