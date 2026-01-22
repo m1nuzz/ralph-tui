@@ -71,6 +71,7 @@ async function runDiagnostics(
       plugin: agentName,
       options: storedConfig.agentOptions ?? {},
       command: storedConfig.command,
+      envExclude: storedConfig.envExclude,
     });
   } catch (error) {
     return {
