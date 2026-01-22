@@ -6,6 +6,7 @@
 import { describe, expect, test, afterEach } from 'bun:test';
 import {
   loadRegistry,
+  saveRegistry,
   registerSession,
   updateRegistryStatus,
   unregisterSession,
@@ -400,6 +401,140 @@ describe('Session Registry', () => {
 
       const cleaned = await cleanupStaleRegistryEntries(mockChecker);
       expect(cleaned).toBe(0);
+    });
+  });
+
+  describe('saveRegistry', () => {
+    test('saves and loads registry correctly', async () => {
+      const sessionId = `test-save-registry-${Date.now()}`;
+      testSessionIds.push(sessionId);
+
+      // Load current registry and add a session
+      const registry = await loadRegistry();
+      registry.sessions[sessionId] = {
+        sessionId,
+        cwd: '/tmp/save-test',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentPlugin: 'claude',
+        trackerPlugin: 'json',
+      };
+
+      // Save the registry
+      await saveRegistry(registry);
+
+      // Load again and verify
+      const loaded = await loadRegistry();
+      expect(loaded.sessions[sessionId]).toBeDefined();
+      expect(loaded.sessions[sessionId].cwd).toBe('/tmp/save-test');
+    });
+  });
+
+  describe('concurrent operations', () => {
+    test('handles multiple rapid registrations', async () => {
+      const baseId = `test-rapid-${Date.now()}`;
+      const count = 5;
+
+      // Register multiple sessions rapidly
+      const promises = [];
+      for (let i = 0; i < count; i++) {
+        const id = `${baseId}-${i}`;
+        testSessionIds.push(id);
+        promises.push(registerSession({
+          sessionId: id,
+          cwd: `/tmp/${id}`,
+          status: 'running',
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          agentPlugin: 'claude',
+          trackerPlugin: 'json',
+        }));
+      }
+
+      await Promise.all(promises);
+
+      // Verify all sessions were registered
+      const registry = await loadRegistry();
+      let found = 0;
+      for (let i = 0; i < count; i++) {
+        if (registry.sessions[`${baseId}-${i}`]) {
+          found++;
+        }
+      }
+      expect(found).toBe(count);
+    });
+
+    test('handles interleaved register and update operations', async () => {
+      const sessionId = `test-interleaved-${Date.now()}`;
+      testSessionIds.push(sessionId);
+
+      // Register
+      await registerSession({
+        sessionId,
+        cwd: '/tmp/interleaved',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentPlugin: 'claude',
+        trackerPlugin: 'json',
+      });
+
+      // Update status multiple times
+      await updateRegistryStatus(sessionId, 'paused');
+      await updateRegistryStatus(sessionId, 'running');
+      await updateRegistryStatus(sessionId, 'interrupted');
+
+      // Verify final state
+      const entry = await getSessionById(sessionId);
+      expect(entry?.status).toBe('interrupted');
+    });
+  });
+
+  describe('registry integrity', () => {
+    test('maintains data integrity across operations', async () => {
+      const session1 = `test-integrity-1-${Date.now()}`;
+      const session2 = `test-integrity-2-${Date.now()}`;
+      testSessionIds.push(session1, session2);
+
+      // Register two sessions
+      await registerSession({
+        sessionId: session1,
+        cwd: '/tmp/integrity-1',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentPlugin: 'claude',
+        trackerPlugin: 'json',
+        prdPath: '/tmp/prd1.json',
+      });
+
+      await registerSession({
+        sessionId: session2,
+        cwd: '/tmp/integrity-2',
+        status: 'paused',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentPlugin: 'codex',
+        trackerPlugin: 'beads',
+        epicId: 'EPIC-1',
+        sandbox: true,
+      });
+
+      // Update one, delete the other
+      await updateRegistryStatus(session1, 'completed');
+      await unregisterSession(session2);
+
+      // Verify state
+      const entry1 = await getSessionById(session1);
+      const entry2 = await getSessionById(session2);
+
+      expect(entry1?.status).toBe('completed');
+      expect(entry1?.prdPath).toBe('/tmp/prd1.json');
+      expect(entry2).toBeNull();
+
+      // Clean up session1 from testSessionIds since we check it explicitly
+      testSessionIds = testSessionIds.filter(id => id !== session2);
     });
   });
 });
