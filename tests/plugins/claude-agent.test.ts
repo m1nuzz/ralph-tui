@@ -3,28 +3,11 @@
  * Tests prompt building, response parsing, JSONL parsing, and setup validation.
  */
 
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { ClaudeAgentPlugin } from '../../src/plugins/agents/builtin/claude.js';
 import type { ClaudeJsonlMessage, JsonlParseResult } from '../../src/plugins/agents/builtin/claude.js';
-import type { AgentFileContext, AgentExecuteOptions } from '../../src/plugins/agents/types.js';
-
-/**
- * Test subclass that overrides buildArgs and getStdinInput to use /bin/sh
- * for verifying environment variable propagation to spawned processes.
- */
-class EnvTestClaudePlugin extends ClaudeAgentPlugin {
-  protected override buildArgs(
-    _prompt: string,
-    _files?: AgentFileContext[],
-    _options?: AgentExecuteOptions
-  ): string[] {
-    return ['-c', 'printf "%s" "$IS_SANDBOX"'];
-  }
-
-  protected override getStdinInput(): string | undefined {
-    return undefined;
-  }
-}
+import { BaseAgentPlugin } from '../../src/plugins/agents/base.js';
+import type { AgentExecuteOptions, AgentExecutionHandle, AgentExecutionResult } from '../../src/plugins/agents/types.js';
 
 describe('ClaudeAgentPlugin', () => {
   let plugin: ClaudeAgentPlugin;
@@ -454,73 +437,96 @@ describe('ClaudeAgentPlugin', () => {
   });
 
   describe('IS_SANDBOX environment variable', () => {
-    let envPlugin: EnvTestClaudePlugin;
+    const fakeHandle: AgentExecutionHandle = {
+      executionId: 'test-id',
+      promise: Promise.resolve({
+        executionId: 'test-id',
+        status: 'completed',
+        stdout: '',
+        stderr: '',
+        durationMs: 0,
+        interrupted: false,
+        startedAt: new Date().toISOString(),
+        endedAt: new Date().toISOString(),
+      } as AgentExecutionResult),
+      interrupt: () => true,
+      isRunning: () => false,
+    };
 
-    beforeEach(() => {
-      envPlugin = new EnvTestClaudePlugin();
-    });
+    test('sets IS_SANDBOX=1 when skipPermissions is true (explicit)', async () => {
+      const testPlugin = new ClaudeAgentPlugin();
+      await testPlugin.initialize({ skipPermissions: true });
 
-    afterEach(async () => {
+      const executeSpy = spyOn(BaseAgentPlugin.prototype, 'execute')
+        .mockReturnValue(fakeHandle);
+
       try {
-        if (await envPlugin.isReady()) {
-          await envPlugin.dispose();
-        }
-      } catch {
-        // Ignore errors from already-disposed plugin
+        testPlugin.execute('test prompt', []);
+
+        expect(executeSpy).toHaveBeenCalled();
+        const calledOptions = executeSpy.mock.calls[0]?.[2] as AgentExecuteOptions | undefined;
+        expect(calledOptions?.env).toBeDefined();
+        expect(calledOptions?.env?.IS_SANDBOX).toBe('1');
+      } finally {
+        executeSpy.mockRestore();
       }
     });
 
-    test('sets IS_SANDBOX=1 when skipPermissions is true (default)', async () => {
-      await envPlugin.initialize({ command: '/bin/sh', skipPermissions: true });
-
-      const handle = envPlugin.execute('test', []);
-      const result = await handle.promise;
-
-      expect(result.status).toBe('completed');
-      expect(result.stdout).toBe('1');
-    });
-
     test('sets IS_SANDBOX=1 with default skipPermissions (true by default)', async () => {
-      await envPlugin.initialize({ command: '/bin/sh' });
+      const testPlugin = new ClaudeAgentPlugin();
+      await testPlugin.initialize({});
 
-      const handle = envPlugin.execute('test', []);
-      const result = await handle.promise;
+      const executeSpy = spyOn(BaseAgentPlugin.prototype, 'execute')
+        .mockReturnValue(fakeHandle);
 
-      expect(result.status).toBe('completed');
-      expect(result.stdout).toBe('1');
+      try {
+        testPlugin.execute('test prompt', []);
+
+        expect(executeSpy).toHaveBeenCalled();
+        const calledOptions = executeSpy.mock.calls[0]?.[2] as AgentExecuteOptions | undefined;
+        expect(calledOptions?.env).toBeDefined();
+        expect(calledOptions?.env?.IS_SANDBOX).toBe('1');
+      } finally {
+        executeSpy.mockRestore();
+      }
     });
 
     test('does not set IS_SANDBOX when skipPermissions is false', async () => {
-      // Remove IS_SANDBOX from process.env if present to avoid false positive
-      const originalIsSandbox = process.env.IS_SANDBOX;
-      delete process.env.IS_SANDBOX;
+      const testPlugin = new ClaudeAgentPlugin();
+      await testPlugin.initialize({ skipPermissions: false });
+
+      const executeSpy = spyOn(BaseAgentPlugin.prototype, 'execute')
+        .mockReturnValue(fakeHandle);
 
       try {
-        await envPlugin.initialize({ command: '/bin/sh', skipPermissions: false });
+        testPlugin.execute('test prompt', []);
 
-        const handle = envPlugin.execute('test', []);
-        const result = await handle.promise;
-
-        expect(result.status).toBe('completed');
-        expect(result.stdout).toBe('');
+        expect(executeSpy).toHaveBeenCalled();
+        const calledOptions = executeSpy.mock.calls[0]?.[2] as AgentExecuteOptions | undefined;
+        expect(calledOptions?.env?.IS_SANDBOX).toBeUndefined();
       } finally {
-        // Restore original value
-        if (originalIsSandbox !== undefined) {
-          process.env.IS_SANDBOX = originalIsSandbox;
-        }
+        executeSpy.mockRestore();
       }
     });
 
     test('user-provided env overrides sandbox env', async () => {
-      await envPlugin.initialize({ command: '/bin/sh', skipPermissions: true });
+      const testPlugin = new ClaudeAgentPlugin();
+      await testPlugin.initialize({ skipPermissions: true });
 
-      const handle = envPlugin.execute('test', [], {
-        env: { IS_SANDBOX: 'custom' },
-      });
-      const result = await handle.promise;
+      const executeSpy = spyOn(BaseAgentPlugin.prototype, 'execute')
+        .mockReturnValue(fakeHandle);
 
-      expect(result.status).toBe('completed');
-      expect(result.stdout).toBe('custom');
+      try {
+        testPlugin.execute('test prompt', [], {
+          env: { IS_SANDBOX: 'custom' },
+        });
+
+        expect(executeSpy).toHaveBeenCalled();
+        const calledOptions = executeSpy.mock.calls[0]?.[2] as AgentExecuteOptions | undefined;
+        expect(calledOptions?.env?.IS_SANDBOX).toBe('custom');
+      } finally {
+        executeSpy.mockRestore();
+      }
     });
   });
 });
