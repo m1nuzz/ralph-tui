@@ -60,7 +60,7 @@ export async function projectConfigExists(cwd: string = process.cwd()): Promise<
  * Format a human-readable reason for why a tracker is unavailable.
  * Provides specific guidance based on what's missing (directory vs CLI).
  */
-function formatTrackerUnavailableReason(plugin: PluginDetection): string {
+export function formatTrackerUnavailableReason(plugin: PluginDetection): string {
   const error = plugin.error ?? '';
 
   // Beads directory not found
@@ -101,30 +101,34 @@ async function detectTrackerPlugins(): Promise<PluginDetection[]> {
     const instance = registry.createInstance(meta.id);
     if (!instance) continue;
 
-    // Initialize with empty config to trigger environment detection.
-    // For beads-family trackers, this checks .beads dir and CLI availability.
-    await instance.initialize({});
+    // Check environment availability using detect() if the tracker supports it.
+    // Beads-family trackers have detect() which checks .beads dir and CLI presence.
+    // Trackers without detect() (like json) have no environmental prerequisites.
+    const instanceAsDetectable = instance as unknown as {
+      detect?: () => Promise<{ available: boolean; error?: string; bdVersion?: string; brVersion?: string }>;
+    };
 
-    const isReady = await instance.isReady();
-
-    // For trackers with a detect() method (beads-family), get granular error info
+    let available = true;
     let error: string | undefined;
     let version: string | undefined;
-    const instanceAsDetectable = instance as unknown as {
-      detect?: () => Promise<{ error?: string; bdVersion?: string; brVersion?: string }>;
-    };
-    if (!isReady && typeof instanceAsDetectable.detect === 'function') {
+
+    if (typeof instanceAsDetectable.detect === 'function') {
+      // Initialize with empty config so detect() can access workingDir/beadsDir defaults
+      await instance.initialize({});
       const detectResult = await instanceAsDetectable.detect();
-      error = detectResult.error;
-      version = detectResult.bdVersion ?? detectResult.brVersion;
+      available = detectResult.available;
+      if (!available) {
+        error = detectResult.error;
+        version = detectResult.bdVersion ?? detectResult.brVersion;
+      }
     }
 
     detections.push({
       id: meta.id,
       name: meta.name,
       description: meta.description,
-      available: isReady,
-      version: isReady ? meta.version : version,
+      available,
+      version: available ? meta.version : version,
       error,
     });
 

@@ -712,6 +712,30 @@ describe('validateConfig', () => {
     expect(result.warnings.some((w) => w.includes('epic'))).toBe(true);
   });
 
+  test('warns about missing epic ID for beads-rust tracker', async () => {
+    const config: RalphConfig = {
+      agent: { name: 'claude', plugin: 'claude', options: {} },
+      tracker: { name: 'beads-rust', plugin: 'beads-rust', options: {} },
+      maxIterations: 10,
+      iterationDelay: 1000,
+      cwd: process.cwd(),
+      outputDir: '.ralph-tui/iterations',
+      progressFile: '.ralph-tui/progress.md',
+      showTui: true,
+      errorHandling: {
+        strategy: 'skip',
+        maxRetries: 3,
+        retryDelayMs: 5000,
+        continueOnNonZeroExit: false,
+      },
+    };
+
+    const result = await validateConfig(config);
+    expect(result.valid).toBe(true);
+    expect(result.warnings.some((w) => w.includes('epic'))).toBe(true);
+    expect(result.warnings.some((w) => w.includes('interactive epic selection'))).toBe(true);
+  });
+
   test('reports warning for json tracker without prdPath (TUI will prompt)', async () => {
     const config: RalphConfig = {
       agent: { name: 'claude', plugin: 'claude', options: {} },
