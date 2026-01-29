@@ -5,6 +5,9 @@
  */
 
 import { spawn } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { BaseAgentPlugin, findCommandPath, quoteForWindowsShell } from '../base.js';
 import { processAgentEvents, processAgentEventsToSegments, type AgentDisplayEvent } from '../output-formatting.js';
 import type {
@@ -19,8 +22,6 @@ import type {
 
 /**
  * Extract a string error message from various error formats.
- * Handles: string, { message: string }, or other objects.
- * @internal Exported for testing only.
  */
 export function extractErrorMessage(err: unknown): string {
   if (!err) return '';
@@ -29,7 +30,6 @@ export function extractErrorMessage(err: unknown): string {
     const obj = err as Record<string, unknown>;
     if (typeof obj.message === 'string') return obj.message;
     if (typeof obj.error === 'string') return obj.error;
-    // Fallback: stringify the object
     try {
       return JSON.stringify(err);
     } catch {
@@ -40,79 +40,140 @@ export function extractErrorMessage(err: unknown): string {
 }
 
 /**
- * Parse Qwen JSON line into standardized display events.
- * Returns AgentDisplayEvent[] - the shared processAgentEvents decides what to show.
- *
- * Qwen CLI event types (when using --output-format stream-json):
- * - "init": Session initialization (skip)
- * - "message" with role "user": Echo of input prompt (skip!)
- * - "message" with role "assistant": LLM response text (extract!)
- * - "tool_call": Tool being called
- * - "tool_result": Tool execution result
- * - "result": Stats/completion (skip)
- * - "error": Error from Qwen
- * @internal Exported for testing only.
+ * Parse a single Qwen event object into standardized display events.
+ */
+export function parseQwenEvent(event: any): AgentDisplayEvent[] {
+  if (!event || typeof event !== 'object') return [];
+
+  const events: AgentDisplayEvent[] = [];
+
+  // Protocol Support: Check for various ways Qwen might send content
+  const isAssistant = event.type === 'assistant' || event.type === 'message' || event.role === 'assistant';
+  const isUser = event.type === 'user' || event.role === 'user';
+
+  if (isAssistant && !isUser) {
+    // Try multiple possible content fields - enhanced to handle different formats
+    let content = event.content || event.text || event.delta?.content;
+
+    // Handle the case where content is in event.message.content as an array of objects
+    if (!content && event.message?.content) {
+      if (Array.isArray(event.message.content)) {
+        // Handle array of content objects like [{type: "text", text: "..."}]
+        content = event.message.content
+          .map((item: any) => item.text || item.content || item)
+          .filter((text: any) => text && typeof text === 'string')
+          .join(' ');
+      } else {
+        content = event.message.content;
+      }
+    }
+
+    if (content && typeof content === 'string') {
+      events.push({ type: 'text', content });
+    }
+  } else if (event.type === 'tool_call' || event.type === 'function_call') {
+    const toolName = event.name || event.function?.name || 'unknown';
+    const toolInput = event.arguments || event.args || event.input;
+    events.push({ type: 'tool_use', name: toolName, input: toolInput });
+  } else if (event.type === 'tool_result' || event.type === 'function_result') {
+    const isError = event.is_error === true || event.error !== undefined;
+    if (isError) {
+      const errMsg = extractErrorMessage(event.error);
+      events.push({ type: 'error', message: errMsg });
+    }
+    events.push({ type: 'tool_result' });
+  } else if (event.type === 'error') {
+    const errorMsg = extractErrorMessage(event.error) || extractErrorMessage(event.message) || 'Unknown error';
+    events.push({ type: 'error', message: errorMsg });
+  }
+
+  return events;
+}
+
+/**
+ * Legacy wrapper for single-line parsing (for tests).
  */
 export function parseQwenJsonLine(jsonLine: string): AgentDisplayEvent[] {
-  if (!jsonLine || jsonLine.length === 0) return [];
-
+  if (!jsonLine || jsonLine.trim().length === 0) return [];
   try {
-    const event = JSON.parse(jsonLine);
-    const events: AgentDisplayEvent[] = [];
-
-    // Handle Qwen CLI event types
-    if (event.type === 'message') {
-      // IMPORTANT: Skip user messages - they echo the input prompt
-      if (event.role === 'user') {
-        return [];
-      }
-      // Extract assistant response
-      if (event.role === 'assistant' && event.content) {
-        events.push({ type: 'text', content: event.content });
-      }
-    } else if (event.type === 'tool_call' || event.type === 'function_call') {
-      // Tool call event
-      const toolName = event.name || event.function?.name || 'unknown';
-      const toolInput = event.arguments || event.args || event.input;
-      events.push({ type: 'tool_use', name: toolName, input: toolInput });
-    } else if (event.type === 'tool_result' || event.type === 'function_result') {
-      // Tool result
-      const isError = event.is_error === true || event.error !== undefined;
-      if (isError) {
-        const errMsg = extractErrorMessage(event.error);
-        events.push({ type: 'error', message: errMsg });
-      }
-      events.push({ type: 'tool_result' });
-    } else if (event.type === 'error') {
-      // Error event
-      const errorMsg = extractErrorMessage(event.error) || extractErrorMessage(event.message) || 'Unknown error';
-      events.push({ type: 'error', message: errorMsg });
-    }
-    // Skip: init, result (stats), and other non-content events
-
-    return events;
+    return parseQwenEvent(JSON.parse(jsonLine.trim()));
   } catch {
-    // Not valid JSON - skip silently (e.g., "YOLO mode is enabled" text)
     return [];
   }
 }
 
 /**
- * Parse Qwen JSON stream output into display events.
- * @internal Exported for testing only.
+ * Extract all JSON objects from a potentially messy string.
+ */
+export function extractJsonObjects(str: string): { objects: any[], remaining: string } {
+  const objects: any[] = [];
+  let current = str;
+
+  while (true) {
+    const start = current.indexOf('{');
+    if (start === -1) break;
+
+    // Simple bracket matching
+    let depth = 0;
+    let end = -1;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = start; i < current.length; i++) {
+      const char = current[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+
+      if (!inString) {
+        if (char === '{') depth++;
+        if (char === '}') depth--;
+
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+
+    if (end !== -1) {
+      const jsonStr = current.substring(start, end + 1);
+      try {
+        objects.push(JSON.parse(jsonStr));
+        current = current.substring(end + 1);
+      } catch {
+        current = current.substring(start + 1);
+      }
+    } else {
+      return { objects, remaining: current.substring(start) };
+    }
+  }
+  return { objects, remaining: '' };
+}
+
+/**
+ * Full parsing wrapper (for tests and internal use).
  */
 export function parseQwenOutputToEvents(data: string): AgentDisplayEvent[] {
+  const { objects } = extractJsonObjects(data);
   const allEvents: AgentDisplayEvent[] = [];
-  for (const line of data.split('\n')) {
-    const events = parseQwenJsonLine(line.trim());
-    allEvents.push(...events);
+  for (const obj of objects) {
+    allEvents.push(...parseQwenEvent(obj));
   }
   return allEvents;
 }
 
 /**
  * Qwen CLI agent plugin implementation.
- * Uses the `qwen` CLI to execute AI coding tasks.
  */
 export class QwenCliAgentPlugin extends BaseAgentPlugin {
   readonly meta: AgentPluginMeta = {
@@ -139,56 +200,35 @@ export class QwenCliAgentPlugin extends BaseAgentPlugin {
 
   override async initialize(config: Record<string, unknown>): Promise<void> {
     await super.initialize(config);
-
-    if (typeof config.model === 'string' && config.model.length > 0) {
-      this.model = config.model;
-    }
-
-    if (typeof config.yoloMode === 'boolean') {
-      this.yoloMode = config.yoloMode;
-    }
-
-    if (typeof config.timeout === 'number' && config.timeout > 0) {
-      this.defaultTimeout = config.timeout;
-    }
+    if (typeof config.model === 'string' && config.model.length > 0) this.model = config.model;
+    if (typeof config.yoloMode === 'boolean') this.yoloMode = config.yoloMode;
+    if (typeof config.timeout === 'number' && config.timeout > 0) this.defaultTimeout = config.timeout;
   }
 
   override async detect(): Promise<AgentDetectResult> {
     const command = this.commandPath ?? this.meta.defaultCommand;
-    const findResult = await findCommandPath(command);
+    let findResult = await findCommandPath(command);
 
     if (!findResult.found) {
-      return {
-        available: false,
-        error: `Qwen CLI not found in PATH. Install from Alibaba Cloud ModelStudio.`,
-      };
+      const versionResult = await this.runVersion(command);
+      if (versionResult.success) {
+        findResult = { found: true, path: command };
+      } else {
+        return { available: false, error: `Qwen CLI not found in PATH.` };
+      }
     }
 
     const versionResult = await this.runVersion(findResult.path);
-
     if (!versionResult.success) {
-      return {
-        available: false,
-        executablePath: findResult.path,
-        error: versionResult.error,
-      };
+      return { available: false, executablePath: findResult.path, error: versionResult.error };
     }
 
-    // Store the detected path for use in execute()
     this.commandPath = findResult.path;
-
-    return {
-      available: true,
-      version: versionResult.version,
-      executablePath: findResult.path,
-    };
+    return { available: true, version: versionResult.version, executablePath: findResult.path };
   }
 
-  private runVersion(
-    command: string
-  ): Promise<{ success: boolean; version?: string; error?: string }> {
+  private runVersion(command: string): Promise<{ success: boolean; version?: string; error?: string }> {
     return new Promise((resolve) => {
-      // Only use shell on Windows where direct spawn may not work
       const useShell = process.platform === 'win32';
       const proc = spawn(useShell ? quoteForWindowsShell(command) : command, ['--version'], {
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -206,38 +246,18 @@ export class QwenCliAgentPlugin extends BaseAgentPlugin {
         resolve(result);
       };
 
-      proc.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      proc.on('error', (error) => {
-        safeResolve({ success: false, error: `Failed to execute: ${error.message}` });
-      });
-
+      proc.stdout?.on('data', (d) => stdout += d.toString());
+      proc.stderr?.on('data', (d) => stderr += d.toString());
+      proc.on('error', (e) => safeResolve({ success: false, error: e.message }));
       proc.on('close', (code) => {
         if (code === 0) {
-          const versionMatch = stdout.match(/(\d+\.\d+\.\d+)/);
-          if (!versionMatch?.[1]) {
-            safeResolve({
-              success: false,
-              error: `Unable to parse qwen version output: ${stdout}`,
-            });
-            return;
-          }
-          safeResolve({ success: true, version: versionMatch[1] });
+          const m = stdout.match(/(\d+\.\d+\.\d+)/);
+          safeResolve(m ? { success: true, version: m[1] } : { success: false, error: 'Parse error' });
         } else {
-          safeResolve({ success: false, error: stderr || `Exited with code ${code}` });
+          safeResolve({ success: false, error: stderr || `Code ${code}` });
         }
       });
-
-      const timer = setTimeout(() => {
-        proc.kill();
-        safeResolve({ success: false, error: 'Timeout waiting for --version' });
-      }, 5000);
+      const timer = setTimeout(() => { proc.kill(); safeResolve({ success: false, error: 'Timeout' }); }, 5000);
     });
   }
 
@@ -249,7 +269,7 @@ export class QwenCliAgentPlugin extends BaseAgentPlugin {
         prompt: 'Model to use:',
         type: 'select',
         choices: [
-          { value: '', label: 'Default', description: 'Use configured default model' },
+          { value: '', label: 'Default', description: 'Use configured default' },
           { value: 'coder-model', label: 'Qwen Coder', description: 'qwen3-coder-plus-2025-09-23' },
           { value: 'vision-model', label: 'Qwen Vision', description: 'qwen3-vl-plus-2025-09-23' },
         ],
@@ -259,159 +279,64 @@ export class QwenCliAgentPlugin extends BaseAgentPlugin {
       },
       {
         id: 'yoloMode',
-        prompt: 'Enable YOLO mode (auto-approve)?',
+        prompt: 'Enable YOLO mode?',
         type: 'boolean',
         default: true,
         required: false,
-        help: 'Skip approval prompts for autonomous operation',
+        help: 'Skip approval prompts',
       },
     ];
   }
 
-  protected buildArgs(
-    _prompt: string,
-    _files?: AgentFileContext[],
-    _options?: AgentExecuteOptions
-  ): string[] {
-    const args: string[] = [];
-
-    // Note: Prompt is passed via stdin (see getStdinInput) to avoid
-    // Windows shell interpretation issues with special characters.
-    // Qwen CLI (like Gemini CLI) reads from stdin when -p is not provided.
-
-    // Always use stream-json format for output parsing
-    args.push('--output-format', 'stream-json');
-
-    // Model selection
-    if (this.model) {
-      args.push('-m', this.model);
-    }
-
-    // Auto-approve mode
-    if (this.yoloMode) {
-      args.push('--yolo');
-    }
-
+  protected buildArgs(_p: string, _f?: AgentFileContext[], _o?: AgentExecuteOptions): string[] {
+    const args: string[] = ['--output-format', 'stream-json'];
+    if (this.model) args.push('-m', this.model);
+    if (this.yoloMode) args.push('--yolo');
     return args;
   }
 
-  /**
-   * Provide the prompt via stdin instead of command args.
-   */
-  protected override getStdinInput(
-    prompt: string,
-    _files?: AgentFileContext[],
-    _options?: AgentExecuteOptions
-  ): string {
+  protected override getStdinInput(prompt: string): string {
     return prompt;
   }
 
-  /**
-   * Override execute to parse Qwen JSON output.
-   */
-  override execute(
-    prompt: string,
-    files?: AgentFileContext[],
-    options?: AgentExecuteOptions
-  ): AgentExecutionHandle {
-    // Buffer for incomplete JSONL lines split across chunks
-    let jsonlBuffer = '';
+  override execute(prompt: string, files?: AgentFileContext[], options?: AgentExecuteOptions): AgentExecutionHandle {
+    let internalBuffer = '';
 
-    // Helper to flush remaining buffer content
-    const flushBuffer = () => {
-      if (!jsonlBuffer) return;
-      const trimmed = jsonlBuffer.trim();
-      if (!trimmed) return;
+    const processBuffer = () => {
+      if (!internalBuffer) return;
 
-      // Forward to onJsonlMessage if valid JSON
-      if (options?.onJsonlMessage && trimmed.startsWith('{')) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          options.onJsonlMessage(parsed);
-        } catch {
-          // Not valid JSON, skip
+      const { objects, remaining } = extractJsonObjects(internalBuffer);
+      internalBuffer = remaining;
+
+      if (objects.length > 0) {
+        const allEvents: AgentDisplayEvent[] = [];
+        for (const obj of objects) {
+          options?.onJsonlMessage?.(obj);
+          allEvents.push(...parseQwenEvent(obj));
+        }
+
+        if (allEvents.length > 0) {
+          if (options?.onStdoutSegments) options.onStdoutSegments(processAgentEventsToSegments(allEvents));
+          if (options?.onStdout) options.onStdout(processAgentEvents(allEvents));
         }
       }
-
-      // Process for display events
-      const events = parseQwenOutputToEvents(trimmed);
-      if (events.length > 0) {
-        if (options?.onStdoutSegments) {
-          const segments = processAgentEventsToSegments(events);
-          if (segments.length > 0) {
-            options.onStdoutSegments(segments);
-          }
-        }
-        if (options?.onStdout) {
-          const parsed = processAgentEvents(events);
-          if (parsed.length > 0) {
-            options.onStdout(parsed);
-          }
-        }
-      }
-
-      jsonlBuffer = '';
     };
 
-    // Wrap callbacks to parse JSON events
     const parsedOptions: AgentExecuteOptions = {
       ...options,
       onStdout: (options?.onStdout || options?.onStdoutSegments || options?.onJsonlMessage)
         ? (data: string) => {
-            // Prepend any buffered partial line from previous chunk
-            const combined = jsonlBuffer + data;
-
-            // Split into lines - last element may be incomplete
-            const lines = combined.split('\n');
-
-            // If data doesn't end with newline, last line is incomplete - buffer it
-            if (!data.endsWith('\n')) {
-              jsonlBuffer = lines.pop() || '';
-            } else {
-              jsonlBuffer = '';
-            }
-
-            // Process complete lines
-            const completeData = lines.join('\n');
-
-            // Parse raw JSONL lines and forward to onJsonlMessage for subagent tracing
-            if (options?.onJsonlMessage) {
-              for (const line of lines) {
-                const trimmed = line.trim();
-                if (trimmed && trimmed.startsWith('{')) {
-                  try {
-                    const parsed = JSON.parse(trimmed);
-                    options.onJsonlMessage(parsed);
-                  } catch {
-                    // Not valid JSON, skip
-                  }
-                }
-              }
-            }
-
-            // Process for display events
-            const events = parseQwenOutputToEvents(completeData);
-            if (events.length > 0) {
-              // Call TUI-native segments callback if provided
-              if (options?.onStdoutSegments) {
-                const segments = processAgentEventsToSegments(events);
-                if (segments.length > 0) {
-                  options.onStdoutSegments(segments);
-                }
-              }
-              // Also call legacy string callback if provided
-              if (options?.onStdout) {
-                const parsed = processAgentEvents(events);
-                if (parsed.length > 0) {
-                  options.onStdout(parsed);
-                }
-              }
-            }
-          }
+          try { appendFileSync(join(tmpdir(), 'qwen-raw-v3.log'), `[STDOUT] ${data}\n`); } catch { }
+          internalBuffer += data;
+          processBuffer();
+        }
         : undefined,
-      // Wrap onEnd to flush buffer before calling original callback
+      onStderr: (data: string) => {
+        try { appendFileSync(join(tmpdir(), 'qwen-raw-v3.log'), `[STDERR] ${data}\n`); } catch { }
+        options?.onStderr?.(data);
+      },
       onEnd: (result) => {
-        flushBuffer();
+        processBuffer();
         options?.onEnd?.(result);
       },
     };
@@ -421,25 +346,17 @@ export class QwenCliAgentPlugin extends BaseAgentPlugin {
 
   override async validateSetup(answers: Record<string, unknown>): Promise<string | null> {
     const model = answers.model;
-    if (model !== undefined && model !== '' && typeof model === 'string') {
-      if (!['coder-model', 'vision-model'].includes(model) && !model.startsWith('qwen-')) {
-        return 'Invalid model. Qwen models start with "qwen-" or use "coder-model"/"vision-model" presets.';
-      }
+    if (model && typeof model === 'string' && !['coder-model', 'vision-model'].includes(model) && !model.startsWith('qwen-')) {
+      return `Invalid model format. Model must be "coder-model", "vision-model", or start with "qwen-" prefix.`;
     }
     return null;
   }
 
   override validateModel(model: string): string | null {
-    if (model === '' || model === undefined) {
-      return null;
-    }
-    if (!['coder-model', 'vision-model'].includes(model) && !model.startsWith('qwen-')) {
-      return `Invalid model "${model}". Qwen models start with "qwen-" or use "coder-model"/"vision-model" presets.`;
-    }
-    return null;
+    if (!model || ['coder-model', 'vision-model'].includes(model) || model.startsWith('qwen-')) return null;
+    return `Invalid model "${model}". Model must start with "qwen-" prefix.`;
   }
 }
 
 const createQwenCliAgent: AgentPluginFactory = () => new QwenCliAgentPlugin();
-
 export default createQwenCliAgent;
